@@ -91,6 +91,12 @@ t image-inspect-cmd "/bin/sh" $D image inspect -f '{{.Config.Cmd}}' alpine
 code pull-missing 1 $D pull kiri-does-not-exist/nope:none
 t rmi "Untagged" $D rmi alpine:3.21
 code rmi-missing 1 $D rmi alpine:3.21
+# A client may send the repository slash percent-encoded (Java Testcontainers
+# does); both forms must name the same image (issue #223).
+$D tag alpine mongodb/mongodb-atlas-local:8.0 >/dev/null
+t image-inspect-encoded-slash "200" curl --unix-socket "$SOCK" --path-as-is -sS -o /dev/null -w '%{http_code}' "http://localhost/v1.44/images/mongodb%2Fmongodb-atlas-local:8.0/json"
+t image-inspect-plain-slash "200" curl --unix-socket "$SOCK" --path-as-is -sS -o /dev/null -w '%{http_code}' "http://localhost/v1.44/images/mongodb/mongodb-atlas-local:8.0/json"
+$D rmi mongodb/mongodb-atlas-local:8.0 >/dev/null 2>&1
 
 section "run: output and exit codes"
 code lifecycle-response-status 0 python3 "$(dirname "$0")/lifecycle-status.py" "$SOCK" alpine
