@@ -200,20 +200,25 @@ mod tests {
             w.write_all(bytes).unwrap();
             w.finish().unwrap()
         };
-        let config = json!({"os": "linux", "architecture": "arm64", "created": "2026-01-01T00:00:00Z", "config": {"Cmd": ["echo", "hi"], "Env": ["A=1"]}});
+        let config = json!({"os": "linux", "architecture": "arm64", "created": "2026-01-01T00:00:00Z", "config": {"Cmd": ["echo", "hi"], "Env": ["A=1"], "Labels": {"com.example.kind": "integration"}}});
         let (cfg, _) = put(&serde_json::to_vec(&config).unwrap());
         let (layer, size) = put(b"\x1f\x8bnot really gzip");
         let image = from_config("demo:1".into(), &cfg, &config, vec![Layer { digest: layer.clone(), size, media_type: media_type_of(&store.blob_path(&layer).unwrap()).unwrap().into() }]);
         store.put_image(image.clone()).unwrap();
 
         let mut tarball = Vec::new();
-        save(&store, &[image.clone()], &mut tarball).unwrap();
+        save(&store, std::slice::from_ref(&image), &mut tarball).unwrap();
 
         let other = Store::open(dir.join("other")).unwrap();
         let loaded = load(&other, tarball.as_slice()).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, "demo:1");
         assert_eq!(loaded[0].config.cmd, ["echo", "hi"]);
+        // Labels live in the config blob, which save writes whole.
+        assert_eq!(
+            other.labels(&loaded[0].config_digest),
+            json!({"com.example.kind": "integration"})
+        );
         assert_eq!(loaded[0].layers[0].digest, layer);
         assert!(loaded[0].layers[0].media_type.ends_with("gzip"));
         assert_eq!(other.find("demo:1").unwrap().unwrap().config_digest, cfg);

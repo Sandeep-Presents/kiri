@@ -442,8 +442,10 @@ fn images(req: &Request, engine: &Engine) -> Result<Value, Error> {
     }
     Ok(Value::Array(
         list.iter()
-            .filter(|i| f.any("reference", |p| reference_matches(p, &i.name)) && f.labels(&Value::Null))
-            .map(|i| {
+            .filter(|i| f.any("reference", |p| reference_matches(p, &i.name)))
+            .map(|i| (i, engine.store.labels(&i.config_digest)))
+            .filter(|(_, labels)| f.labels(labels))
+            .map(|(i, labels)| {
                 json!({
                     "Id": i.config_digest,
                     "ParentId": "",
@@ -453,7 +455,7 @@ fn images(req: &Request, engine: &Engine) -> Result<Value, Error> {
                     "Size": i.size,
                     "SharedSize": -1,
                     "VirtualSize": i.size,
-                    "Labels": null,
+                    "Labels": labels,
                     "Containers": -1,
                     // Not Docker's: when this image arrived here, for the window.
                     "Pulled": i.pulled_at,
@@ -479,6 +481,7 @@ fn image_inspect(engine: &Engine, name: &str) -> Result<Value, Error> {
             "Entrypoint": if i.config.entrypoint.is_empty() { Value::Null } else { json!(i.config.entrypoint) },
             "WorkingDir": i.config.working_dir,
             "User": i.config.user,
+            "Labels": engine.store.labels(&i.config_digest),
             "Healthcheck": image_healthcheck(engine, &i),
         },
         "RootFS": {"Type": "layers", "Layers": i.layers.iter().map(|l| &l.digest).collect::<Vec<_>>()},
@@ -2644,6 +2647,106 @@ mod tests {
         assert_eq!(upload_compression(&[0x28, 0xb5, 0x2f, 0xfd, 0, 0]), Upload::Unsupported("zstd"));
         assert_eq!(upload_compression(b"etc/ho"), Upload::Tar);
         assert_eq!(upload_compression(b""), Upload::Tar);
+    }
+
+    /// An image in the store whose config blob carries `labels` — the blob is
+    /// what inspect and the list read them from (#206).
+    fn put_image_with_labels(engine: &Engine, name: &str, labels: Value) {
+        use std::io::Write as _;
+        let config = json!({"os": "linux", "architecture": "arm64", "created": "2026-01-01T00:00:00Z", "config": {"Cmd": ["echo", "hi"], "Labels": labels}});
+        let bytes = serde_json::to_vec(&config).unwrap();
+        let digest = kiri_image::store::sha256_digest(&bytes);
+        let mut w = engine.store.blob_writer(&digest).unwrap();
+        w.write_all(&bytes).unwrap();
+        w.finish().unwrap();
+        engine
+            .store
+            .put_image(kiri_image::archive::from_config(
+                name.into(),
+                &digest,
+                &config,
+                Vec::new(),
+            ))
+            .unwrap();
+    }
+
+    /// `docker image inspect` shows the image's `config.Labels` (#206): a
+    /// labelled image carries them, an unlabelled one shows null, as Docker's.
+    #[test]
+    fn image_inspect_shows_config_labels() {
+        let dir =
+            std::env::temp_dir().join(format!("kiri-inspect-labels-test-{}", std::process::id()));
+        let engine = Engine::boot(kiri_image::Store::open(&dir).unwrap()).unwrap();
+        let shown = |labels: Value| {
+            put_image_with_labels(&engine, "labelled:latest", labels);
+            let inspect = image_inspect(&engine, "labelled:latest").unwrap();
+            engine.store.remove_image("labelled:latest").unwrap();
+            inspect["Config"]["Labels"].clone()
+        };
+        let wanted =
+            json!({"com.openmausbot.local-vm": "1", "com.openmausbot.cua-driver": "0.37.0"});
+        assert_eq!(shown(wanted.clone()), wanted);
+        assert_eq!(shown(Value::Null), Value::Null);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `docker images --filter label=...` finds the images whose config
+    /// carries the label, and each row shows its real labels (#206).
+    #[test]
+    fn image_list_filters_and_lists_by_label() {
+        let dir =
+            std::env::temp_dir().join(format!("kiri-list-labels-test-{}", std::process::id()));
+        let engine = Engine::boot(kiri_image::Store::open(&dir).unwrap()).unwrap();
+        put_image_with_labels(
+            &engine,
+            "labelled:latest",
+            json!({"com.example.kind": "integration"}),
+        );
+        put_image_with_labels(&engine, "plain:latest", Value::Null);
+        let list = |filters: &str| {
+            let rows = images(
+                &Request::internal("GET", "/images/json", &[("filters", filters)], Vec::new()),
+                &engine,
+            )
+            .unwrap();
+            let mut names: Vec<String> = rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["RepoTags"][0].as_str().unwrap().to_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(
+            list(r#"{"label":["com.example.kind=integration"]}"#),
+            ["labelled:latest"]
+        );
+        assert_eq!(
+            list(r#"{"label":["com.example.kind"]}"#),
+            ["labelled:latest"]
+        );
+        assert!(list(r#"{"label":["com.example.missing"]}"#).is_empty());
+        assert_eq!(list("{}"), ["labelled:latest", "plain:latest"]);
+        let rows = images(
+            &Request::internal("GET", "/images/json", &[], Vec::new()),
+            &engine,
+        )
+        .unwrap();
+        let by_name = |n: &str| {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["RepoTags"][0] == n)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            by_name("labelled:latest")["Labels"],
+            json!({"com.example.kind": "integration"})
+        );
+        assert_eq!(by_name("plain:latest")["Labels"], Value::Null);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DDEV's CopyIntoVolume sends a gzipped tar: the guest gets the tar.
