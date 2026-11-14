@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— el flux del registre ha acabat —",
   "‹ Back": "‹ Enrere",
   "★ Star on GitHub": "★ Estrella a GitHub",
-  "✓ Installed": "✓ Instal·lat"
+  "✓ Installed": "✓ Instal·lat",
+  "Waiting to come back": "Esperant que torni",
+  "Stop waiting": "Deixa d'esperar",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri el tornarà a connectar quan torni. Deixa d'esperar per deixar-lo en aquest ordinador."
 }

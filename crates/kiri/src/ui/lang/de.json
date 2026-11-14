@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— der Log-Stream ist beendet —",
   "‹ Back": "‹ Zurück",
   "★ Star on GitHub": "★ Stern auf GitHub",
-  "✓ Installed": "✓ Installiert"
+  "✓ Installed": "✓ Installiert",
+  "Waiting to come back": "Wartet auf Rückkehr",
+  "Stop waiting": "Nicht mehr warten",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri verbindet es wieder, sobald es zurück ist. Nicht mehr warten, damit es an diesem Computer bleibt."
 }

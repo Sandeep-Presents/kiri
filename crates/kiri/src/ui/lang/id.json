@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— aliran log berakhir —",
   "‹ Back": "‹ Kembali",
   "★ Star on GitHub": "★ Bintangi di GitHub",
-  "✓ Installed": "✓ Terinstal"
+  "✓ Installed": "✓ Terinstal",
+  "Waiting to come back": "Menunggu kembali",
+  "Stop waiting": "Berhenti menunggu",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri memasangnya lagi saat kembali. Berhenti menunggu agar tetap di komputer ini."
 }

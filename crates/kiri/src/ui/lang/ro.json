@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— fluxul de jurnal s-a încheiat —",
   "‹ Back": "‹ Înapoi",
   "★ Star on GitHub": "★ Stea pe GitHub",
-  "✓ Installed": "✓ Instalat"
+  "✓ Installed": "✓ Instalat",
+  "Waiting to come back": "Așteaptă să revină",
+  "Stop waiting": "Nu mai aștepta",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri îl atașează din nou când revine. Nu mai așteptați ca să rămână pe acest computer."
 }

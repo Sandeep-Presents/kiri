@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— สตรีมบันทึกสิ้นสุดแล้ว —",
   "‹ Back": "‹ ย้อนกลับ",
   "★ Star on GitHub": "★ ให้ดาวบน GitHub",
-  "✓ Installed": "✓ ติดตั้งแล้ว"
+  "✓ Installed": "✓ ติดตั้งแล้ว",
+  "Waiting to come back": "กำลังรอให้กลับมา",
+  "Stop waiting": "หยุดรอ",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri จะเชื่อมต่ออีกครั้งเมื่อกลับมา หยุดรอเพื่อให้อยู่กับคอมพิวเตอร์นี้"
 }

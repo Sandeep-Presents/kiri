@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— جریان لاگ پایان یافت —",
   "‹ Back": "‹ بازگشت",
   "★ Star on GitHub": "★ ستاره در GitHub",
-  "✓ Installed": "✓ نصب شد"
+  "✓ Installed": "✓ نصب شد",
+  "Waiting to come back": "در انتظار بازگشت",
+  "Stop waiting": "توقف انتظار",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri وقتی برگردد دوباره وصلش می‌کند. انتظار را متوقف کنید تا روی این رایانه بماند."
 }

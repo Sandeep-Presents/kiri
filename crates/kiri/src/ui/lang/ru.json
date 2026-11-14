@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— поток журнала завершён —",
   "‹ Back": "‹ Назад",
   "★ Star on GitHub": "★ Звезда на GitHub",
-  "✓ Installed": "✓ Установлено"
+  "✓ Installed": "✓ Установлено",
+  "Waiting to come back": "Ждёт возвращения",
+  "Stop waiting": "Не ждать",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri снова подключит его, когда оно вернётся. Перестаньте ждать, чтобы оставить его на этом компьютере."
 }

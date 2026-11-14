@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— ログストリームが終了しました —",
   "‹ Back": "‹ 戻る",
   "★ Star on GitHub": "★ GitHub でスター",
-  "✓ Installed": "✓ インストール済み"
+  "✓ Installed": "✓ インストール済み",
+  "Waiting to come back": "戻るのを待機中",
+  "Stop waiting": "待機をやめる",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "戻ってきたら Kiri がもう一度接続します。このコンピュータに残すには待機をやめてください。"
 }

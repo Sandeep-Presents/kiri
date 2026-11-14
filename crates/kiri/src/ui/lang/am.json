@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— የምዝግብ ማስታወሻ ዥረቱ አብቅቷል —",
   "‹ Back": "‹ ተመለስ",
   "★ Star on GitHub": "★ በGitHub ላይ ኮከብ ይስጡ",
-  "✓ Installed": "✓ ተጭኗል"
+  "✓ Installed": "✓ ተጭኗል",
+  "Waiting to come back": "እስኪመለስ በመጠበቅ ላይ",
+  "Stop waiting": "መጠበቅ አቁም",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri ሲመለስ እንደገና ያገናኘዋል። በዚህ ኮምፒውተር ላይ ለመተው መጠበቅ ያቁሙ።"
 }

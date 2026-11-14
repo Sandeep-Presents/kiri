@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— انتهى تدفق السجلات —",
   "‹ Back": "‹ رجوع",
   "★ Star on GitHub": "★ نجمة على GitHub",
-  "✓ Installed": "✓ مثبّت"
+  "✓ Installed": "✓ مثبّت",
+  "Waiting to come back": "بانتظار عودته",
+  "Stop waiting": "إيقاف الانتظار",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "يوصله Kiri مجددًا عند عودته. أوقف الانتظار لتتركه على هذا الكمبيوتر."
 }

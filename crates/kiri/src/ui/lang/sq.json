@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— rrjedha e regjistrit përfundoi —",
   "‹ Back": "‹ Prapa",
   "★ Star on GitHub": "★ Yll në GitHub",
-  "✓ Installed": "✓ Instaluar"
+  "✓ Installed": "✓ Instaluar",
+  "Waiting to come back": "Në pritje të kthimit",
+  "Stop waiting": "Ndalo pritjen",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri e lidh përsëri kur të kthehet. Ndaloni pritjen për ta lënë në këtë kompjuter."
 }

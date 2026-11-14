@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— журнал ағыны аяқталды —",
   "‹ Back": "‹ Артқа",
   "★ Star on GitHub": "★ GitHub-та жұлдызша",
-  "✓ Installed": "✓ Орнатылды"
+  "✓ Installed": "✓ Орнатылды",
+  "Waiting to come back": "Қайтуын күтуде",
+  "Stop waiting": "Күтуді тоқтату",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Қайтып келгенде Kiri оны қайта қосады. Осы компьютерде қалдыру үшін күтуді тоқтатыңыз."
 }

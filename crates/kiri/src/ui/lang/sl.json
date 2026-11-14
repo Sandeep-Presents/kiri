@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— tok dnevnika se je končal —",
   "‹ Back": "‹ Nazaj",
   "★ Star on GitHub": "★ Zvezdica na GitHubu",
-  "✓ Installed": "✓ Nameščeno"
+  "✓ Installed": "✓ Nameščeno",
+  "Waiting to come back": "Čaka na vrnitev",
+  "Stop waiting": "Nehaj čakati",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri ga znova priklopi, ko se vrne. Nehajte čakati, da ostane na tem računalniku."
 }

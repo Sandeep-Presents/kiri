@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— günlük akışı sona erdi —",
   "‹ Back": "‹ Geri",
   "★ Star on GitHub": "★ GitHub'da yıldız ver",
-  "✓ Installed": "✓ Yüklendi"
+  "✓ Installed": "✓ Yüklendi",
+  "Waiting to come back": "Geri gelmesi bekleniyor",
+  "Stop waiting": "Beklemeyi bırak",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri geri geldiğinde onu yeniden bağlar. Bu bilgisayarda kalması için beklemeyi bırakın."
 }

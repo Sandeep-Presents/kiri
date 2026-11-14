@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— loggstrømmen ble avsluttet —",
   "‹ Back": "‹ Tilbake",
   "★ Star on GitHub": "★ Stjerne på GitHub",
-  "✓ Installed": "✓ Installert"
+  "✓ Installed": "✓ Installert",
+  "Waiting to come back": "Venter på at den kommer tilbake",
+  "Stop waiting": "Slutt å vente",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri kobler den til igjen når den er tilbake. Slutt å vente for å la den bli på denne datamaskinen."
 }

@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— لێشاوی لۆگ کۆتایی هات —",
   "‹ Back": "‹ گەڕانەوە",
   "★ Star on GitHub": "★ ئەستێرە لە GitHub",
-  "✓ Installed": "✓ دامەزراوە"
+  "✓ Installed": "✓ دامەزراوە",
+  "Waiting to come back": "چاوەڕێی گەڕانەوەیە",
+  "Stop waiting": "وەستاندنی چاوەڕێ",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri کاتێک گەڕایەوە دووبارە پەیوەستی دەکاتەوە. چاوەڕێ بوەستێنە بۆ ئەوەی لەسەر ئەم کۆمپیوتەرە بمێنێتەوە."
 }

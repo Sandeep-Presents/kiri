@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— லாக் ஸ்ட்ரீம் முடிந்தது —",
   "‹ Back": "‹ பின்செல்",
   "★ Star on GitHub": "★ GitHub-இல் ஸ்டார் செய்",
-  "✓ Installed": "✓ நிறுவப்பட்டது"
+  "✓ Installed": "✓ நிறுவப்பட்டது",
+  "Waiting to come back": "திரும்ப வரக் காத்திருக்கிறது",
+  "Stop waiting": "காத்திருப்பதை நிறுத்து",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "திரும்ப வந்ததும் Kiri அதை மீண்டும் இணைக்கும். இந்தக் கணினியிலேயே வைக்கக் காத்திருப்பதை நிறுத்துங்கள்."
 }

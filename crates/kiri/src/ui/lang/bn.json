@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— লগ স্ট্রিম শেষ হয়েছে —",
   "‹ Back": "‹ ফিরে যান",
   "★ Star on GitHub": "★ GitHub-এ স্টার দিন",
-  "✓ Installed": "✓ ইনস্টল করা হয়েছে"
+  "✓ Installed": "✓ ইনস্টল করা হয়েছে",
+  "Waiting to come back": "ফেরার অপেক্ষায়",
+  "Stop waiting": "অপেক্ষা বন্ধ করুন",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "ফিরে এলে Kiri এটি আবার যুক্ত করবে। এই কম্পিউটারে রেখে দিতে অপেক্ষা বন্ধ করুন।"
 }

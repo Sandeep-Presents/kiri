@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— ສະຕຣີມບັນທຶກສິ້ນສຸດແລ້ວ —",
   "‹ Back": "‹ ກັບຄືນ",
   "★ Star on GitHub": "★ ໃຫ້ດາວໃນ GitHub",
-  "✓ Installed": "✓ ຕິດຕັ້ງແລ້ວ"
+  "✓ Installed": "✓ ຕິດຕັ້ງແລ້ວ",
+  "Waiting to come back": "ກຳລັງລໍຖ້າໃຫ້ກັບມາ",
+  "Stop waiting": "ຢຸດລໍຖ້າ",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri ຈະເຊື່ອມຕໍ່ມັນອີກເມື່ອກັບມາ. ຢຸດລໍຖ້າເພື່ອປະມັນໄວ້ໃນຄອມພິວເຕີນີ້."
 }

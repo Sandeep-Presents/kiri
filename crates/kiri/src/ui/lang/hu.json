@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— a naplófolyam véget ért —",
   "‹ Back": "‹ Vissza",
   "★ Star on GitHub": "★ Csillag a GitHubon",
-  "✓ Installed": "✓ Telepítve"
+  "✓ Installed": "✓ Telepítve",
+  "Waiting to come back": "Visszatérésre vár",
+  "Stop waiting": "Várakozás leállítása",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "A Kiri újra csatlakoztatja, amikor visszatér. Állítsa le a várakozást, hogy ezen a számítógépen maradjon."
 }

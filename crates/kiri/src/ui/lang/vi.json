@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— luồng nhật ký đã kết thúc —",
   "‹ Back": "‹ Quay lại",
   "★ Star on GitHub": "★ Gắn sao trên GitHub",
-  "✓ Installed": "✓ Đã cài đặt"
+  "✓ Installed": "✓ Đã cài đặt",
+  "Waiting to come back": "Đang chờ quay lại",
+  "Stop waiting": "Ngừng chờ",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri sẽ gắn lại khi thiết bị quay lại. Ngừng chờ để để nó lại trên máy tính này."
 }

@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— lokivirta päättyi —",
   "‹ Back": "‹ Takaisin",
   "★ Star on GitHub": "★ Tähti GitHubissa",
-  "✓ Installed": "✓ Asennettu"
+  "✓ Installed": "✓ Asennettu",
+  "Waiting to come back": "Odottaa paluuta",
+  "Stop waiting": "Lopeta odotus",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri liittää sen uudelleen, kun se palaa. Lopeta odotus, niin se jää tähän tietokoneeseen."
 }

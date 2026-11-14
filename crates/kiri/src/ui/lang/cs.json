@@ -1658,5 +1658,8 @@
   "— the log stream ended —": "— proud protokolu skončil —",
   "‹ Back": "‹ Zpět",
   "★ Star on GitHub": "★ Hvězdička na GitHubu",
-  "✓ Installed": "✓ Nainstalováno"
+  "✓ Installed": "✓ Nainstalováno",
+  "Waiting to come back": "Čeká na návrat",
+  "Stop waiting": "Přestat čekat",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri ho po návratu znovu připojí. Přestaňte čekat, aby zůstal v tomto počítači."
 }
