@@ -369,6 +369,10 @@ pub struct Container {
     pub paused: bool,
     /// Addresses on `spec.extra_networks` while running, as (network, ip).
     pub extra_ips: Vec<(String, [u8; 4])>,
+    /// The interface each extra network is plugged in as while running,
+    /// as (network, n) for `eth{n}`. A disconnect leaves a gap, so the
+    /// number can't be worked out from the network's place in the list.
+    pub extra_ifs: Vec<(String, u32)>,
     /// IPv6 addresses while running: on `network_mode`, and on extra
     /// networks as (network, ip). Only networks with IPv6 give one.
     pub ip6: Option<[u8; 16]>,
@@ -1062,6 +1066,7 @@ impl Engine {
                 early_close: false,
                 paused: false,
                 extra_ips: Vec::new(),
+                extra_ifs: Vec::new(),
                 ip6: None,
                 extra_ip6s: Vec::new(),
                     log: Arc::new(Mutex::new(super::logfile::Log::new(super::logfile::dir(self.store.root(), &s.id), &s.spec.log_config))),
@@ -1214,6 +1219,7 @@ impl Engine {
                         for (net, ip) in std::mem::take(&mut c.extra_ips) {
                             self.release_ip(&net, ip);
                         }
+                        c.extra_ifs.clear();
                         self.release_ip6s(c);
                         c.paused = false;
                         closed_ports = c.forwards.take();
@@ -1296,6 +1302,7 @@ impl Engine {
                     for (net, ip) in std::mem::take(&mut c.extra_ips) {
                         self.release_ip(&net, ip);
                     }
+                    c.extra_ifs.clear();
                     self.release_ip6s(c);
                     c.paused = false;
                     c.pid = 0;
@@ -1575,6 +1582,7 @@ impl Engine {
                 early_close: false,
                 paused: false,
                 extra_ips: Vec::new(),
+                extra_ifs: Vec::new(),
                 ip6: None,
                 extra_ip6s: Vec::new(),
                 log: Arc::new(Mutex::new(super::logfile::Log::new(log_dir, &log_config))),
@@ -2372,6 +2380,7 @@ impl Engine {
         }
         if let Some(c) = self.lock().containers.get_mut(id) {
             c.extra_ips.push((net.name.clone(), ip));
+            c.extra_ifs.push((net.name.clone(), n));
             if let Some(a) = ip6 {
                 c.extra_ip6s.push((net.name.clone(), a));
             }
@@ -2402,7 +2411,10 @@ impl Engine {
                 return Err(Error::BadRequest("container sharing network namespace with another container or host cannot be connected to any other network".into()));
             }
             c.spec.extra_networks.push(ExtraNetwork { name: net.name.clone(), aliases, ipv4_address, ipv6_address, mac_address });
-            (c.spec.extra_networks.len() as u32, c.status == Status::Running)
+            // The lowest eth number not in use: a disconnect may have freed
+            // one below the top.
+            let n = (1..).find(|n| !c.extra_ifs.iter().any(|(_, x)| x == n)).expect("a free number");
+            (n, c.status == Status::Running)
         };
         self.save();
         if running {
@@ -2438,14 +2450,19 @@ impl Engine {
                 let (_, a) = c.extra_ip6s.remove(i);
                 self.lock_networks().release6(&net.name, a);
             }
-            (pos as u32 + 1, ip)
+            let n = c.extra_ifs.iter().position(|(x, _)| *x == net.name).map(|i| c.extra_ifs.remove(i).1);
+            (n, ip)
         };
         self.save();
         if let Some(ip) = ip {
-            if let Some(vm) = self.awake() {
-                vm.net_detach(&id, n, &net.bridge, ip)?;
-            }
+            let unplugged = match (self.awake(), n) {
+                (Some(vm), Some(n)) => vm.net_detach(&id, n, &net.bridge, ip),
+                _ => Ok(()),
+            };
+            // The network is gone from the container either way: its
+            // address goes back too, or the network can never be removed.
             self.release_ip(&net.name, ip);
+            unplugged?;
         }
         self.emit_network("disconnect", &net, &id);
         Ok(())

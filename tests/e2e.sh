@@ -748,6 +748,16 @@ t disconnect "no-eth1" bash -c "$D network disconnect nb multi && ($D exec multi
 t disconnect-dns-gone "bad address" $D run --rm --network nb alpine wget -qO- -T 2 http://web2
 t compose-multi-net "PONG" bash -c "d=\$(mktemp -d); printf 'services:\n  db:\n    image: redis:7-alpine\n    networks: [back]\n  app:\n    image: redis:7-alpine\n    command: sh -c \"sleep 1; redis-cli -h db ping; sleep 30\"\n    networks: [front, back]\nnetworks:\n  front: {}\n  back: {}\n' > \$d/compose.yaml; cd \$d && $D compose -p kirinet up -d >/dev/null 2>&1; sleep 3; $D compose -p kirinet logs app; $D compose -p kirinet down >/dev/null 2>&1; rm -rf \$d"
 $D rm -f multi >/dev/null; $D network rm na nb >/dev/null
+# Disconnecting leaves a gap in the eth numbers: each network keeps its own
+# interface, a later one takes the free number, and every address goes back.
+$D network create nc1 >/dev/null; $D network create nc2 >/dev/null; $D network create nc3 >/dev/null
+$D run -d --name gaps alpine sleep 300 >/dev/null
+t disconnect-first-then-second "ok" bash -c "$D network connect nc1 gaps && $D network connect nc2 gaps && $D network disconnect nc1 gaps && $D network disconnect nc2 gaps && echo ok"
+t connect-into-gap "eth1 eth2" bash -c "$D network connect nc1 gaps && $D network connect nc2 gaps && $D network disconnect nc1 gaps && $D network connect nc3 gaps && $D exec gaps sh -c 'ip -4 -o addr | grep -o \"eth[12] \" | sort | tr -d \"\\n\"'"
+t connect-into-gap-addresses "2" bash -c "$D exec gaps ip -4 -o addr | grep -c 'eth[12] '"
+t disconnect-all-in-any-order "ok" bash -c "$D network disconnect nc2 gaps && $D network disconnect nc3 gaps && echo ok"
+$D rm -f gaps >/dev/null
+t network-rm-after-disconnects "all removed" bash -c "$D network rm nc1 nc2 nc3 >/dev/null 2>&1; [ -z \"\$($D network ls -q --filter name=nc1 --filter name=nc2 --filter name=nc3)\" ] && echo all removed"
 
 section "events, prune, system df, search"
 t events "start" bash -c "($D events --filter container=evt --format '{{.Action}}' & p=\$!; sleep 0.5; $D run --name evt alpine true >/dev/null; sleep 0.5; kill \$p) 2>/dev/null"
