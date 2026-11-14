@@ -1601,7 +1601,7 @@ impl Engine {
     }
 
     fn start_inner(&self, key: &str, by_user: bool) -> Result<(), Error> {
-        let (id, layers, argv, spec, size) = {
+        let (id, layers, argv, mut spec, size) = {
             let mut st = self.lock();
             let id = resolve(&st, key)?;
             let c = st.containers.get_mut(&id).expect("resolved");
@@ -1637,6 +1637,10 @@ impl Engine {
             }
             (id, c.layers.clone(), argv, c.spec.clone(), c.size.or(c.spec.console_size))
         };
+        // A bind source that is a link is followed again at every start, as
+        // Docker does: re-pointing it between runs (a `current` release
+        // link) mounts the new target.
+        spec.mounts = super::api::fresh_bind_sources(&spec.mounts, &spec.mount_info);
         let mut hostname = if spec.hostname.is_empty() { id[..12].to_owned() } else { spec.hostname.clone() };
         let mut domainname = spec.domainname.clone();
         // `--network container:<id>`: that container's namespace, hostname
