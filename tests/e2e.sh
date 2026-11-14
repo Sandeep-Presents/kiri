@@ -78,6 +78,15 @@ cleanup
 section "engine"
 t version-server "Kiri" $D version
 t version-api "1.47" $D version --format '{{.Server.APIVersion}}'
+# What Testcontainers needs (#222, #121), asked as docker-java asks: a Docker
+# Engine version (Kiri's own beside it), the image's CMD for "Cmd": [], the
+# connection kept after a copy, log follow, one timestamp a line.
+t version-kiri-component "Kiri=" $D version --format '{{range .Server.Components}}{{.Name}}={{.Version}} {{end}}'
+for c in version cmd keepalive follow follow-created timestamps; do
+  t "testcontainers-$c" "ok $c" python3 "$(dirname "$0")/testcontainers-api.py" "$SOCK" "$c"
+done
+# Ryuk mounts the engine's socket and talks to it from inside.
+t socket-mount-reaches-kiri "Kiri" $D run --rm -v "$SOCK:/var/run/docker.sock" docker:cli docker version --format '{{.Server.Platform.Name}}'
 t info-os "Kiri" $D info --format '{{.OperatingSystem}}'
 t info-cgroup "2" $D info --format '{{.CgroupVersion}}'
 

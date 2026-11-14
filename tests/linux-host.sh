@@ -11,9 +11,10 @@ N=${N:-kiri-linux-host}
 [ -x "$BIN/kiri" ] || { echo "build first: cargo xtask linux"; exit 1; }
 $D rm -f "$N" >/dev/null 2>&1
 $D run -d --name "$N" --privileged --tmpfs /run -v "$N":/var/lib/kiri -v "$N"-store:/root/.local/share/kiri \
-  -v "$BIN:/opt/kiri:ro" alpine sh -c 'apk add -q docker-cli curl >/dev/null 2>&1; exec /opt/kiri/kiri daemon' >/dev/null
+  -v "$BIN:/opt/kiri:ro" alpine sh -c 'apk add -q docker-cli curl python3 >/dev/null 2>&1; exec /opt/kiri/kiri daemon' >/dev/null
 up() { for _ in $(seq 60); do $D exec "$N" sh -c 'DOCKER_HOST=unix:///root/.kiri/run/docker.sock docker version' >/dev/null 2>&1 && break; sleep 1; done; }
 up
+$D cp "$(dirname "$0")/testcontainers-api.py" "$N":/testcontainers-api.py >/dev/null
 PASS=0; FAIL=0
 t() {
   local name=$1 want=$2; shift 2
@@ -31,6 +32,11 @@ t exec "nginx version" "docker exec web nginx -v"
 t session-own "SID=1" "docker run --rm alpine sh -c 'echo SID=\$(cut -d\" \" -f6 /proc/1/stat)'"
 t exec-session-own "own" "docker exec web sh -c 's=\$(cut -d\" \" -f6 /proc/\$\$/stat); [ \"\$s\" = \"\$\$\" ] && echo own || echo \"session \$s\"'"
 t cp "copied" "echo copied > /tmp/x && docker cp /tmp/x web:/tmp/x && docker exec web cat /tmp/x"
+# What Testcontainers needs (#222, #121); see tests/testcontainers-api.py.
+for c in version cmd keepalive follow follow-created timestamps; do
+  t "testcontainers-$c" "ok $c" "for i in \$(seq 60); do command -v python3 >/dev/null && break; sleep 1; done; python3 /testcontainers-api.py /root/.kiri/run/docker.sock $c"
+done
+t socket-mount-reaches-kiri "Kiri" "docker run --rm -v /root/.kiri/run/docker.sock:/var/run/docker.sock docker:cli docker version --format '{{.Server.Platform.Name}}'"
 t stats "web" "docker stats --no-stream --format '{{.Name}}'"
 t network-dns "PONG" "docker network create lhn >/dev/null 2>&1; docker run -d --name db --network lhn redis:7-alpine >/dev/null; sleep 1; docker run --rm --network lhn redis:7-alpine redis-cli -h db ping"
 t bind-host-path "3." "docker run --rm -v /etc:/h:ro alpine cat /h/alpine-release"
