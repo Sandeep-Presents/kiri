@@ -91,7 +91,6 @@ pub struct Process {
 #[derive(Debug)]
 struct Teardown {
     base: PathBuf,
-    rootfs: PathBuf,
     cgroup: PathBuf,
     remove: bool,
 }
@@ -222,12 +221,13 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
     if spec.argv.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no command to run"));
     }
-    let rootfs = mount_rootfs(paths, spec.id, spec.layers)?;
+    let layers: Vec<&str> = spec.layers.iter().collect();
+    let rootfs = super::roots::acquire(paths, spec.id, &layers)?;
     let base = paths.containers.join(spec.id);
 
     let cgroup = paths.cgroup.join(spec.id);
     let remove = spec.flags & run_flags::REMOVE != 0;
-    let undo = Teardown { base: base.clone(), rootfs: rootfs.clone(), cgroup: cgroup.clone(), remove };
+    let undo = Teardown { base: base.clone(), cgroup: cgroup.clone(), remove };
     // A restart that fails must not take the stopped container's files with it.
     let cleanup = |e: io::Error| {
         undo_now(&undo, remove);
@@ -327,10 +327,17 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
         ParentStdio::Tty { sock } => sock.as_raw_fd(),
         ParentStdio::Pipes { stderr, .. } => stderr.as_raw_fd(),
     };
+    // The child never becomes a Process, so nothing else tears it down:
+    // its root goes back here, with its cgroup and runtime files.
     let kill_child = |e: io::Error| {
         let own = child_report(report);
         // SAFETY: killing the child we just cloned.
         unsafe { libc::kill(pid, libc::SIGKILL) };
+        // Gone before its cgroup and root go: its namespace holds the root
+        // until then, and a busy cgroup can't be removed.
+        // SAFETY: reaping the child we just killed; it isn't in `procs`.
+        unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+        undo_now(&undo, remove);
         match own {
             Some(why) => io::Error::new(e.kind(), why),
             None => e,
@@ -397,7 +404,7 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
         dns_entries: (bridged && embedded_dns).then(|| (spec.net.bridge.to_owned(), spec.net.ip)).into_iter().collect(),
         veths,
         netns,
-        teardown: Some(Teardown { base, rootfs, cgroup, remove }),
+        teardown: Some(Teardown { base, cgroup, remove }),
     })
 }
 
@@ -437,8 +444,9 @@ fn overlay_features(plain: bool) -> &'static str {
 }
 
 /// Mounts a container's root: its image layers under its writable layer,
-/// at `<containers>/<id>/rootfs`. Returns that path.
-pub fn mount_rootfs(paths: &Paths, id: &str, image_layers: StrList<'_>) -> io::Result<PathBuf> {
+/// at `<containers>/<id>/rootfs`. Returns that path. Only `roots` calls
+/// this, which keeps it to one mount per container.
+pub(super) fn mount_rootfs(paths: &Paths, id: &str, image_layers: &[&str]) -> io::Result<PathBuf> {
     valid_id(id)?;
     let base = paths.containers.join(id);
     let (upper, work, rootfs) = (base.join("upper"), base.join("work"), base.join("rootfs"));
@@ -600,13 +608,15 @@ fn remove_cgroup(dir: &std::path::Path) {
 }
 
 fn undo_now(t: &Teardown, remove_files: bool) {
-    let _ = sys::umount_lazy(&t.rootfs);
+    // A copy still in progress keeps the root mounted, and a removed
+    // container's files, until it ends.
+    super::roots::release(&t.base);
     if let Some(id) = t.base.file_name() {
         let _ = fs::remove_dir_all(PathBuf::from("/run/kiri").join(id));
     }
     remove_cgroup(&t.cgroup);
     if remove_files {
-        let _ = fs::remove_dir_all(&t.base);
+        super::roots::remove(&t.base);
     }
 }
 
@@ -633,9 +643,7 @@ pub fn remove_volume(name: &str) {
 
 pub fn remove(paths: &Paths, id: &str) {
     if valid_id(id).is_ok() {
-        let base = paths.containers.join(id);
-        let _ = sys::umount_lazy(&base.join("rootfs"));
-        let _ = fs::remove_dir_all(base);
+        super::roots::remove(&paths.containers.join(id));
     }
 }
 
@@ -652,10 +660,22 @@ pub fn sweep(paths: &Paths, cgroup: &std::path::Path) {
         let cg = cgroup.join(id);
         if cg.is_dir() {
             kill_cgroup(&cg);
+        }
+        // Every root this data directory left mounted, stopped containers'
+        // too (a copy in progress when the agent went), as many times as it
+        // was stacked: the next start mounts it fresh.
+        let rootfs = paths.containers.join(id).join("rootfs");
+        for _ in 0..16 {
+            if sys::umount_lazy(&rootfs).is_err() {
+                break;
+            }
+        }
+        // systemd removes a stopped service's cgroups (#230), so this runs
+        // whether or not the container's cgroup is still there.
+        let _ = fs::remove_dir_all(PathBuf::from("/run/kiri").join(id));
+        if cg.is_dir() {
             remove_cgroup(&cg);
         }
-        let _ = sys::umount_lazy(&paths.containers.join(id).join("rootfs"));
-        let _ = fs::remove_dir_all(PathBuf::from("/run/kiri").join(id));
     }
     // Host-side veths are kv<9 characters of the id><4 hex digits>.
     let Ok(links) = fs::read_dir("/sys/class/net") else { return };
@@ -706,7 +726,7 @@ pub fn retain(paths: &Paths, keep: StrList<'_>, running: &[&str]) {
     }
 }
 
-fn valid_id(id: &str) -> io::Result<()> {
+pub(super) fn valid_id(id: &str) -> io::Result<()> {
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad id"));
     }

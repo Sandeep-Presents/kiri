@@ -35,6 +35,31 @@ t distribution-missing "404" "curl -s -o /dev/null -w '%{http_code}' --unix-sock
 # dir twice in a row: kernels with overlayfs index on (Arch) refused the
 # second with EBUSY (#227). A renamed directory must survive a commit.
 t cp-then-start "failed 0" "f=0; for i in 1 2 3 4 5; do id=\$(docker create alpine sleep 30); docker cp /etc/hostname \$id:/f >/dev/null 2>&1 || f=\$((f+1)); docker start \$id >/dev/null 2>&1 || f=\$((f+1)); docker rm -f \$id >/dev/null; done; echo failed \$f"
+# A copy still running when its container starts shares the container's
+# root mount: two overlay mounts of one writable layer at once are undefined
+# behaviour to the kernel (#227). slow-tar holds the copy open for 3 s.
+$D exec -i "$N" sh -c 'cat > /slow-tar.py' <<'PY'
+import sys, tarfile, time
+t = tarfile.TarInfo("slow")
+t.size = 2 << 20
+o = sys.stdout.buffer
+o.write(t.tobuf())
+o.write(b"x" * (1 << 20))
+o.flush()
+time.sleep(3)
+o.write(b"x" * (1 << 20) + bytes(1024))
+PY
+mounts='cat /proc/[0-9]*/mountinfo 2>/dev/null | grep "$id/upper" | cut -d" " -f3 | sort -u | wc -l'
+t cp-during-start-one-mount "during=1 copied=2097152 after=0" "id=\$(docker create alpine sleep 30); python3 /slow-tar.py | docker cp - \$id:/ & sleep 1; docker start \$id >/dev/null; d=\$($mounts); wait; c=\$(docker exec \$id stat -c %s /slow); docker rm -f \$id >/dev/null; for i in \$(seq 20); do [ \$($mounts) = 0 ] && break; sleep 0.1; done; echo during=\$d copied=\$c after=\$($mounts)"
+# A restart while a copy into the running container still writes: both
+# finish and nothing stays mounted. (The copy then holds the root, so the
+# restart shares it; mountinfo can't show an old mount whose namespace has
+# gone, so roots.rs's unit tests check that part.)
+t cp-during-restart "during=1 after=0" "id=\$(docker run -d alpine sleep 60); python3 /slow-tar.py | docker cp - \$id:/tmp & sleep 1; docker restart -t 0 \$id >/dev/null; d=\$($mounts); wait; docker rm -f \$id >/dev/null; for i in \$(seq 20); do [ \$($mounts) = 0 ] && break; sleep 0.1; done; echo during=\$d after=\$($mounts)"
+# A start that fails once the container's process exists gives its root
+# back: rm then deletes it and leaves nothing mounted.
+t failed-start-frees-root "gone mounts=0" "docker rm -f kiri-badsysctl >/dev/null 2>&1; docker run -d --name kiri-badsysctl --sysctl net.ipv4.kiri_no_such_key=1 alpine true >/dev/null 2>&1; id=\$(docker inspect -f '{{.Id}}' kiri-badsysctl); docker rm -f kiri-badsysctl >/dev/null; for i in \$(seq 20); do test -e /var/lib/kiri/containers/\$id || break; sleep 0.1; done; test -e /var/lib/kiri/containers/\$id && printf kept || printf gone; echo \" mounts=\$($mounts)\""
+t cp-stopped-unmounts "after=0" "id=\$(docker create alpine true); docker cp /etc/hostname \$id:/f >/dev/null; for i in \$(seq 20); do [ \$($mounts) = 0 ] && break; sleep 0.1; done; echo after=\$($mounts); docker rm \$id >/dev/null"
 t commit-renamed-dir "kept" "docker rm -f kiri-rename >/dev/null 2>&1; docker run --name kiri-rename alpine mv /etc/apk /etc/apk2; docker commit kiri-rename kiri-rename-test >/dev/null; docker rm -f kiri-rename >/dev/null; docker run --rm kiri-rename-test sh -c 'test -f /etc/apk2/repositories && echo kept'; docker rmi kiri-rename-test >/dev/null"
 # A container and an exec each lead their own session, so killpg from inside
 # never reaches the daemon (#191).

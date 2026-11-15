@@ -12,7 +12,7 @@ use kiri_proto::{Exited, MAX_OUTPUT_CHUNK, Msg, Stats, Stream};
 
 use super::container::{self, NetCtx, Paths, Process};
 use super::net::{self, Bridges, Dhcp};
-use super::{layers, meminfo, sys};
+use super::{fsnotify, layers, meminfo, sys};
 
 /// Input held for a process that is not reading yet. The host sends at most
 /// `INPUT_WINDOW` bytes beyond what `InputConsumed` acknowledged, so a
@@ -99,6 +99,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
     let mut out = Vec::with_capacity(4096);
     let mut chunk = vec![0u8; MAX_OUTPUT_CHUNK];
     let mut fs_buf = Vec::new();
+    let mut fs_events = fsnotify::Pending::default();
 
     loop {
         fds.clear();
@@ -120,6 +121,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
         fds.push(libc::pollfd { fd: pressure.as_ref().map_or(-1, |f| f.as_raw_fd()), events: libc::POLLPRI, revents: 0 });
         fds.push(libc::pollfd { fd: term.as_ref().map_or(-1, |f| f.as_raw_fd()), events: libc::POLLIN, revents: 0 });
         fds.push(libc::pollfd { fd: usage_wake.as_raw_fd(), events: libc::POLLIN, revents: 0 });
+        super::copy::interest(&mut fds);
         for r in &relays {
             r.interest(&mut fds);
         }
@@ -146,6 +148,14 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
         let wait = dns.timeout_ms();
         if wait >= 0 {
             timeout = if timeout < 0 { wait } else { timeout.min(wait) };
+        }
+        // Changes from the Mac still to raise: a few now, the rest after
+        // whatever else is ready.
+        if !fs_events.is_empty() {
+            fs_events.raise_some();
+            if !fs_events.is_empty() {
+                timeout = 0;
+            }
         }
         // SAFETY: `fds` is a valid array of pollfd of the given length.
         let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
@@ -251,6 +261,9 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                 while let Some(r) = super::relay::accept_host_bound(l, super::net::HOST_ADDR) {
                     relays.push(r);
                 }
+                continue;
+            }
+            if super::copy::on_readable(pfd.fd, paths) {
                 continue;
             }
             if let Some(r) = relays.iter_mut().find(|r| r.owns(pfd.fd)) {
@@ -501,6 +514,10 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                         dns.forget_bridge(bridge);
                         bridges.remove(bridge);
                     }
+                    continue;
+                }
+                Ok(Msg::FsEvents(lines)) => {
+                    fs_events.add(lines.iter());
                     continue;
                 }
                 Ok(Msg::Retain(keep)) => {
@@ -804,6 +821,7 @@ fn child_signals() -> io::Result<OwnedFd> {
 /// seconds at most), and each container torn down: mounts, cgroup, and the
 /// writable layer of a `--rm` one. Veths go with their network namespaces.
 fn stop_containers(procs: &mut HashMap<libc::pid_t, Proc>) {
+    super::copy::stop_all();
     for p in procs.values().filter(|p| p.exited.is_none()) {
         // SAFETY: signalling a child we started and have not reaped.
         unsafe { libc::kill(p.run.pid, libc::SIGKILL) };
@@ -880,6 +898,7 @@ fn reap(procs: &mut HashMap<libc::pid_t, Proc>) {
         } else {
             continue;
         };
+        super::copy::exited(pid);
         if let Some(p) = procs.get_mut(&pid) {
             p.exited = Some((code, sys::boottime_ns()));
             // Nobody will read input any more.
