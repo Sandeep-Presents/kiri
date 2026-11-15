@@ -1312,6 +1312,34 @@ fn ports_list(c: &Container) -> Value {
     )
 }
 
+/// What `-p` asked for, as Docker's inspect keeps it in HostConfig: the
+/// container port and protocol, each with the host address and port given
+/// (an empty HostPort for "any free port"). Empty, not null, with none.
+fn inspect_bindings(ports: &[super::ports::Binding]) -> Value {
+    let mut m = serde_json::Map::new();
+    for b in ports {
+        let entry = m.entry(format!("{}/{}", b.container_port, b.proto)).or_insert_with(|| json!([]));
+        if let Some(a) = entry.as_array_mut() {
+            a.push(json!({"HostIp": b.host_ip, "HostPort": if b.host_port == 0 { String::new() } else { b.host_port.to_string() }}));
+        }
+    }
+    Value::Object(m)
+}
+
+/// Config.ExposedPorts: the image's and `--expose`'s ports, and every
+/// published one, as Docker lists them (`"80/tcp": {}`); null with none,
+/// as Docker leaves it out.
+fn inspect_exposed(ports: &[super::ports::Binding], exposed: &[u16]) -> Value {
+    let mut m = serde_json::Map::new();
+    for b in ports {
+        m.insert(format!("{}/{}", b.container_port, b.proto), json!({}));
+    }
+    for p in exposed {
+        m.entry(format!("{p}/tcp")).or_insert_with(|| json!({}));
+    }
+    if m.is_empty() { Value::Null } else { Value::Object(m) }
+}
+
 /// Docker's `NetworkSettings.Ports` map for inspect and `docker port`.
 fn ports_map(c: &Container) -> Value {
     let mut m = serde_json::Map::new();
@@ -1939,8 +1967,10 @@ fn inspect(c: &Container, nets: &[super::network::Network]) -> Value {
             "AttachStdout": true,
             "AttachStderr": true,
             "Labels": if c.spec.labels.is_object() { c.spec.labels.clone() } else { json!({}) },
+            "ExposedPorts": inspect_exposed(&c.spec.ports, &c.spec.exposed),
         },
         "HostConfig": {
+            "PortBindings": inspect_bindings(&c.spec.ports),
             "AutoRemove": c.spec.auto_remove,
             "Privileged": c.spec.privileged,
             "CapAdd": c.spec.cap_add,
@@ -3005,6 +3035,13 @@ mod network_option_tests {
     #[test]
     fn container_network_mode_refuses_what_docker_refuses() {
         assert!(container_mode_allowed(&json!({"HostConfig": {"NetworkMode": "container:web"}}), "web").is_ok());
+        // inspect reports the bindings asked for, as Docker does.
+        let b = |container_port, proto: &str, host_ip: &str, host_port| super::super::ports::Binding { container_port, proto: proto.into(), host_ip: host_ip.into(), host_port };
+        let ports = [b(80, "tcp", "", 8080), b(80, "tcp", "127.0.0.1", 0), b(53, "udp", "", 5353)];
+        assert_eq!(inspect_bindings(&ports), json!({"80/tcp": [{"HostIp": "", "HostPort": "8080"}, {"HostIp": "127.0.0.1", "HostPort": ""}], "53/udp": [{"HostIp": "", "HostPort": "5353"}]}));
+        assert_eq!(inspect_bindings(&[]), json!({}));
+        assert_eq!(inspect_exposed(&[], &[]), Value::Null);
+        assert_eq!(inspect_exposed(&ports, &[80, 9000]), json!({"80/tcp": {}, "53/udp": {}, "9000/tcp": {}}));
         // Compose sends empty lists and maps for what a service leaves out.
         assert!(container_mode_allowed(&json!({"Hostname": "", "ExposedPorts": {}, "HostConfig": {"PortBindings": {}, "Dns": [], "Links": null}}), "web").is_ok());
         assert!(container_mode_allowed(&json!({}), "").is_err());
