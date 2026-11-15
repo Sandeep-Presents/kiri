@@ -19,6 +19,16 @@ the release notes unless they prefer not to be.
 Security fixes go into the latest release. Kiri updates itself, so please
 update before reporting.
 
+## Docker socket access
+
+Clients that can connect to Kiri's Docker Engine socket can control the
+engine. Give socket access only to users and workloads you trust to manage
+Kiri, including containers that mount the socket.
+
+On native Linux, the `kiri` group can use `/run/kiri/docker.sock` to run
+containers as root on the host. Treat membership in `kiri` like membership
+in `docker`. See [Linux packaging](packaging/README.md#linux) for details.
+
 ## In scope
 
 - Escaping a container or the VM to the host (the Mac, Windows or the Linux
