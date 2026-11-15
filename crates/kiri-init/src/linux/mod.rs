@@ -12,6 +12,7 @@ mod net;
 mod netlink;
 mod pid1;
 mod relay;
+mod roots;
 mod seccomp;
 mod sys;
 mod transport;
