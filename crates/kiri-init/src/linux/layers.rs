@@ -171,7 +171,7 @@ fn untar(reader: impl Read, dest: &Path) -> io::Result<u64> {
             if matches!(hidden, b"" | b"." | b"..") {
                 return Err(escapes());
             }
-            let parent = whiteout_dir(dest, path.parent().unwrap_or(Path::new("")))?;
+            let parent = layer_dir(dest, path.parent().unwrap_or(Path::new("")))?;
             if hidden == b".wh..opq" {
                 let p = sys::cstr(&parent)?;
                 // SAFETY: valid NUL-terminated path, name and a 1-byte value.
@@ -187,6 +187,15 @@ fn untar(reader: impl Read, dest: &Path) -> io::Result<u64> {
             }
             continue;
         }
+        // A hard link's target is read from the layer's root, so `/usr/bin/perl`
+        // is the layer's `usr/bin/perl`, as Docker, containerd and Podman read
+        // it. tar-rs takes the leading `/` as the guest's root and refuses it.
+        if entry.header().entry_type().is_hard_link()
+            && let Some(target) = entry.link_name()?.filter(|t| t.has_root())
+        {
+            hard_link_in(dest, &path, &target)?;
+            continue;
+        }
         total += entry.size();
         entry.unpack_in(dest)?;
     }
@@ -194,14 +203,28 @@ fn untar(reader: impl Read, dest: &Path) -> io::Result<u64> {
 }
 
 fn escapes() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "whiteout escapes the layer")
+    io::Error::new(io::ErrorKind::InvalidData, "path escapes the layer")
 }
 
-/// The directory under `dest` a whiteout lives in, made if missing. Every
+/// Makes `path` a hard link to `target`, both from the layer's root. Their
+/// directories go through [`layer_dir`], so `..` and a symlink can't take
+/// either outside the layer. `linkat` doesn't follow a symlink `target`: the
+/// link is to the symlink itself, which is in the layer.
+fn hard_link_in(dest: &Path, path: &Path, target: &Path) -> io::Result<()> {
+    let (path, target) = (path.strip_prefix("/").unwrap_or(path), target.strip_prefix("/").unwrap_or(target));
+    let (Some(name), Some(to)) = (path.file_name(), target.file_name()) else { return Err(escapes()) };
+    let src = layer_dir(dest, target.parent().unwrap_or(Path::new("")))?.join(to);
+    let dst = layer_dir(dest, path.parent().unwrap_or(Path::new("")))?.join(name);
+    // As tar-rs does with set_overwrite: an earlier entry of that name is replaced.
+    let _ = fs::remove_file(&dst);
+    fs::hard_link(&src, &dst).map_err(|e| io::Error::new(e.kind(), format!("hard link {} to /{}: {e}", path.display(), target.display())))
+}
+
+/// The directory under `dest` that `parent` names, made if missing. Every
 /// step must be a real directory of this layer: an earlier entry could have
 /// made one a symlink, which a check of the path's text cannot see and which
-/// would carry the whiteout outside the layer.
-fn whiteout_dir(dest: &Path, parent: &Path) -> io::Result<PathBuf> {
+/// would carry a whiteout or a hard link outside the layer.
+fn layer_dir(dest: &Path, parent: &Path) -> io::Result<PathBuf> {
     let mut dir = dest.to_path_buf();
     for part in parent.components() {
         match part {
@@ -331,6 +354,37 @@ mod tests {
         assert!(untar(Capped { inner: &bytes[..], left: u64::MAX }, &dest).is_err());
         assert!(base.join("keep").is_file());
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// A hard link to `/bin/tool` links the layer's `bin/tool`, as with Docker
+    /// (issue 302). `..`, a symlink in the layer and a missing target are
+    /// still refused, and nothing outside the layer is linked.
+    #[test]
+    fn absolute_hard_link_is_read_from_the_layer_root() {
+        let layer = |to: &str| {
+            let mut b = tar::Builder::new(Vec::new());
+            b.append_data(&mut header(3, 0o755), "bin/tool", &b"hi\n"[..]).unwrap();
+            let mut h = header(0, 0o777);
+            h.set_entry_type(tar::EntryType::Symlink);
+            b.append_link(&mut h, "root", "/").unwrap();
+            let mut h = header(0, 0o755);
+            h.set_entry_type(tar::EntryType::Link);
+            b.append_link(&mut h, "bin/tool-1.0", to).unwrap();
+            b.into_inner().unwrap()
+        };
+        let dest = scratch("abs-link");
+        untar(Capped { inner: &layer("/bin/tool")[..], left: u64::MAX }, &dest).unwrap();
+        let (tool, link) = (fs::metadata(dest.join("bin/tool")).unwrap(), fs::metadata(dest.join("bin/tool-1.0")).unwrap());
+        assert_eq!(std::os::unix::fs::MetadataExt::ino(&link), std::os::unix::fs::MetadataExt::ino(&tool), "not a hard link");
+        let _ = fs::remove_dir_all(&dest);
+
+        for (to, why) in [("/../../etc/hostname", "escapes"), ("/root/etc/hostname", "escapes"), ("/bin/nope", "No such file")] {
+            let dest = scratch("abs-link-bad");
+            let err = untar(Capped { inner: &layer(to)[..], left: u64::MAX }, &dest).expect_err(to);
+            assert!(err.to_string().contains(why), "{to}: unexpected error: {err}");
+            assert!(!dest.join("bin/tool-1.0").exists(), "{to}: linked");
+            let _ = fs::remove_dir_all(&dest);
+        }
     }
 
     /// An ordinary whiteout becomes overlayfs's 0:0 character device and
