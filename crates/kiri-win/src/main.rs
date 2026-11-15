@@ -100,6 +100,12 @@ mod flavor;
 mod share;
 #[cfg(windows)]
 mod update;
+// Settings → Import from Docker Desktop: the Mac's and Linux's own
+// crates/kiri/src/import.rs, through the docker CLI's contexts.
+#[cfg(windows)]
+#[path = "../../kiri/src/import.rs"]
+#[allow(dead_code)]
+mod import;
 
 #[cfg(windows)]
 fn main() -> std::process::ExitCode {
