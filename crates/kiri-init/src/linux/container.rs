@@ -401,6 +401,41 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
     })
 }
 
+/// Marks a container whose writable layer holds only whole files and whole
+/// renamed directories (no overlayfs redirects or metadata-only copies).
+const PLAIN_UPPER: &str = "upper-plain";
+
+/// Whether the container's writable layer is plain: marked so, or still
+/// empty, in which case it is marked now, before its first mount writes
+/// anything. One written under a kernel's own defaults before Kiri chose
+/// (Arch turns redirects and metacopy on) isn't, and stays readable only
+/// with those defaults.
+fn plain_upper(base: &Path) -> io::Result<bool> {
+    let marker = base.join(PLAIN_UPPER);
+    if marker.exists() {
+        return Ok(true);
+    }
+    if fs::read_dir(base.join("upper"))?.next().is_some() {
+        return Ok(false);
+    }
+    fs::write(marker, b"")?;
+    Ok(true)
+}
+
+/// The overlayfs features to mount with, whatever the kernel's defaults
+/// (Arch, CachyOS and xanmod turn them on, #227):
+/// - index=off always: with index on, a second mount of an upper dir still
+///   in use fails with EBUSY, and a copy into a created container mounts it
+///   while the last mount is being let go. Safe for any existing upper dir.
+/// - redirect_dir=nofollow, metacopy=off for a plain upper dir: `docker
+///   diff` and `commit` read the upper dir as it is, so it must hold whole
+///   renamed directories and whole files. An upper dir written with those
+///   features keeps the kernel's defaults, or its redirected directories and
+///   metadata-only files would be refused (EPERM) after an update.
+fn overlay_features(plain: bool) -> &'static str {
+    if plain { "index=off,redirect_dir=nofollow,metacopy=off" } else { "index=off" }
+}
+
 /// Mounts a container's root: its image layers under its writable layer,
 /// at `<containers>/<id>/rootfs`. Returns that path.
 pub fn mount_rootfs(paths: &Paths, id: &str, image_layers: StrList<'_>) -> io::Result<PathBuf> {
@@ -431,7 +466,7 @@ pub fn mount_rootfs(paths: &Paths, id: &str, image_layers: StrList<'_>) -> io::R
         }
         lower.push_str(layers::hex(digest)?);
     }
-    let opts = format!("lowerdir={lower},upperdir={},workdir={}", upper.display(), work.display());
+    let opts = format!("lowerdir={lower},upperdir={},workdir={},{}", upper.display(), work.display(), overlay_features(plain_upper(&base)?));
     sys::mount(c"overlay", &sys::cstr(&rootfs)?, c"overlay", 0, Some(&CString::new(opts)?))?;
     Ok(rootfs)
 }
@@ -1542,6 +1577,27 @@ fn find_executable(p: &Prepared) -> Option<CString> {
 #[cfg(test)]
 mod tests {
     use kiri_proto::{Limits, Msg, Net, decode, encode_run, run_flags};
+
+    // #227: a new container's writable layer is marked plain before it is
+    // first mounted, and keeps that; one written before (no mark, not
+    // empty) keeps the kernel's own overlay features, so an update never
+    // makes its redirected or metadata-only files unreadable.
+    #[test]
+    fn only_a_fresh_writable_layer_gets_plain_overlay_features() {
+        let base = std::env::temp_dir().join(format!("kiri-plain-upper-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("upper")).unwrap();
+        assert!(super::plain_upper(&base).unwrap(), "fresh");
+        assert!(base.join(super::PLAIN_UPPER).exists());
+        std::fs::write(base.join("upper/written"), b"x").unwrap();
+        assert!(super::plain_upper(&base).unwrap(), "marked, then written to");
+        std::fs::remove_file(base.join(super::PLAIN_UPPER)).unwrap();
+        assert!(!super::plain_upper(&base).unwrap(), "written before the mark existed");
+        assert!(!base.join(super::PLAIN_UPPER).exists(), "an old layer is never marked");
+        assert_eq!(super::overlay_features(true), "index=off,redirect_dir=nofollow,metacopy=off");
+        assert_eq!(super::overlay_features(false), "index=off");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// Only a pipe or a terminal the user doesn't own yet changes hands:
     /// never /dev/null, a file or a socket, which a stream could otherwise be.

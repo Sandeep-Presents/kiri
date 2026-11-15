@@ -48,6 +48,11 @@ t port-inspect '{"80/tcp":[{"HostIp":"","HostPort":"18082"}]}' "docker inspect -
 # What the registry serves now, for update checkers (#257).
 t distribution '"mediaType":"application/vnd.oci.image.index.v1+json"' "curl -s --unix-socket /kiri/docker.sock http://d/v1.47/distribution/library/alpine:3.21/json"
 t distribution-missing "404" "curl -s -o /dev/null -w '%{http_code}' --unix-socket /kiri/docker.sock http://d/v1.47/distribution/library/no-such-image-kiri-test/json"
+# A copy into a created container, then its start, mounts the same upper
+# dir twice in a row: kernels with overlayfs index on (Arch) refused the
+# second with EBUSY (#227). A renamed directory must survive a commit.
+t cp-then-start "failed 0" "f=0; for i in 1 2 3 4 5; do id=\$(docker create alpine sleep 30); docker cp /etc/hostname \$id:/f >/dev/null 2>&1 || f=\$((f+1)); docker start \$id >/dev/null 2>&1 || f=\$((f+1)); docker rm -f \$id >/dev/null; done; echo failed \$f"
+t commit-renamed-dir "kept" "docker rm -f kiri-rename >/dev/null 2>&1; docker run --name kiri-rename alpine mv /etc/apk /etc/apk2; docker commit kiri-rename kiri-rename-test >/dev/null; docker rm -f kiri-rename >/dev/null; docker run --rm kiri-rename-test sh -c 'test -f /etc/apk2/repositories && echo kept'; docker rmi kiri-rename-test >/dev/null"
 t network-dns "PONG" "docker network create wn >/dev/null 2>&1; docker run -d --name db --network wn redis:7-alpine >/dev/null; sleep 2; docker run --rm --network wn redis:7-alpine redis-cli -h db ping"
 t volume "kept" "docker run --rm -v wv:/d alpine sh -c 'echo kept > /d/f' && docker run --rm -v wv:/d alpine cat /d/f"
 t seccomp "Seccomp:	2" "docker run --rm alpine grep Seccomp: /proc/self/status"
