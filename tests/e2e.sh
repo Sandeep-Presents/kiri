@@ -141,6 +141,9 @@ t workdir-created-readonly-nonroot "/made/ro/1000" $D run --rm --read-only -u 10
 t user-numeric "uid=1000" $D run --rm -u 1000 alpine id
 t user-name "uid=70(postgres)" $D run --rm -u postgres postgres:17-alpine id
 t user-group "gid=0(root)" $D run --rm -u 1000:0 alpine id
+# The user's own group is one of its supplementary groups, as Docker sets them.
+t user-groups-primary "1000 2000" $D run --rm -u 1000:1000 --group-add 2000 alpine sh -c 'grep Groups /proc/self/status | cut -f2'
+t user-groups-exec "65534" bash -c "$D run -d --name groupsexec alpine sleep 60 >/dev/null && $D exec -u nobody groupsexec sh -c 'grep Groups /proc/self/status | cut -f2'; $D rm -f groupsexec >/dev/null"
 t entrypoint "x" $D run --rm --entrypoint echo alpine x
 t entrypoint-image "nginx version" $D run --rm nginx:alpine nginx -v
 t hostname-is-id "" $D run --rm alpine hostname
