@@ -2250,7 +2250,7 @@ fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut UnixStream, r:
             return Ok(Next::KeepAlive);
         }
     };
-    http::upgrade(w)?;
+    http::upgrade_if_asked(req, w)?;
     if want_in {
         forward_stdin(engine.clone(), id, r)?;
     }
@@ -2371,7 +2371,7 @@ fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream,
         http::no_content(w)?;
         return Ok(Next::KeepAlive);
     }
-    http::upgrade(w)?;
+    http::upgrade_if_asked(req, w)?;
     if stdin {
         forward_stdin(engine.clone(), id.to_owned(), r)?;
     }

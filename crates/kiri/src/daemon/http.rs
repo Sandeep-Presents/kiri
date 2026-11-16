@@ -378,6 +378,21 @@ pub fn upgrade(w: &mut impl Write) -> io::Result<()> {
     w.flush()
 }
 
+/// Starts the raw stream for Docker's `attach` and `exec` start. As Docker
+/// does (it checks that the `Upgrade` header is present, not its value), a
+/// client that asked for the upgrade (the docker CLI) gets `101`; one that did
+/// not (docker-java, so Testcontainers) gets `200 OK` with the stream as the
+/// body. A `101` to a client that never asked for it can end its read before
+/// the process's exit code is recorded, and it then sees an exec with no
+/// `ExitCode`.
+pub fn upgrade_if_asked(req: &Request, w: &mut impl Write) -> io::Result<()> {
+    if req.header("Upgrade").is_some() {
+        return upgrade(w);
+    }
+    head(w, 200, "Content-Type: application/vnd.docker.raw-stream\r\n")?;
+    w.flush()
+}
+
 /// Docker's multiplexed stream framing: `[stream, 0, 0, 0, len u32 BE] data`.
 pub fn mux_frame(w: &mut impl Write, stream: u8, data: &[u8]) -> io::Result<()> {
     let mut header = [0u8; 8];
@@ -462,5 +477,27 @@ mod tests {
         assert_eq!(path_of("/images/a+b/json"), "/images/a+b/json");
         // An invalid escape stays written, as in query values.
         assert_eq!(path_of("/images/100%/json"), "/images/100%/json");
+    }
+
+    /// `attach` and `exec` start answer `101` only to a client that asked to
+    /// upgrade (the docker CLI). docker-java, so Testcontainers, does not, and
+    /// gets `200 OK` with the raw stream as the body, as from Docker.
+    #[test]
+    fn upgrades_only_when_asked() {
+        let reply = |headers: Vec<(String, String)>| {
+            let req = Request { method: "POST".into(), path: "/exec/x/start".into(), query: Vec::new(), headers, body: Vec::new() };
+            let mut out = Vec::new();
+            upgrade_if_asked(&req, &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let asked = reply(vec![("Upgrade".into(), "tcp".into()), ("Connection".into(), "Upgrade".into())]);
+        assert!(asked.starts_with("HTTP/1.1 101 "), "{asked}");
+        assert!(asked.contains("Upgrade: tcp\r\n"), "{asked}");
+        let other = reply(vec![("upgrade".into(), "h2c".into())]);
+        assert!(other.starts_with("HTTP/1.1 101 "), "{other}");
+        let plain = reply(Vec::new());
+        assert!(plain.starts_with("HTTP/1.1 200 OK\r\n"), "{plain}");
+        assert!(plain.contains("Content-Type: application/vnd.docker.raw-stream\r\n"), "{plain}");
+        assert!(!plain.contains("Upgrade"), "{plain}");
     }
 }
