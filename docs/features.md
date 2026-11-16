@@ -11,7 +11,9 @@ Apple silicon and Intel Macs (macOS 14+), Windows 10 and 11 (x86-64 and Arm, thr
   `--restart`, `--entrypoint`), `exec`, `logs`, `attach`, `stop`, `kill`,
   `restart`, `rm`, `wait`, `rename`, `pause`/`unpause`, `update`, `stats`,
   `top`, `diff`, `export`, `commit`, `cp` (both ways, running or not),
-  `container prune`; records survive a daemon restart; filters on every list
+  `container prune`; records survive a daemon restart; filters on every list;
+  healthchecks (`--health-cmd` and the other `--health-*` options, including
+  `--health-start-interval`; `ps --filter health=`)
 - **Limits and security**: `--memory`, `--cpus`, `--cpu-shares`,
   `--pids-limit`, `--shm-size`; Docker's default capabilities and a default
   seccomp filter; `--cap-add`/`--cap-drop`, `--privileged`, `--read-only`,
@@ -38,14 +40,19 @@ Apple silicon and Intel Macs (macOS 14+), Windows 10 and 11 (x86-64 and Arm, thr
   `~/.kiri/tls`, whose name constraints allow only `*.kiri.local` and
   `*.kiri.localhost` (Settings → Domains → HTTPS asks macOS to trust it)
 - **Storage**: named and anonymous volumes, bind mounts of Mac paths
-  (virtiofs), `--tmpfs`, `--mount`, `volume` commands
+  (virtiofs), `--tmpfs`, `--mount`, `volume` commands; local volumes that
+  bind a folder (`driver_opts: {type: none, o: bind, device: /path}`)
 - **Images**: `pull` (with `docker login` credentials), `push`, `tag`,
   `save`, `load`, `history`, `search`, `image prune`, `system df`;
   **amd64 images run through Rosetta**, `--platform` honoured
 - **Builds**: `docker build` / `buildx build` through BuildKit running in a
   Kiri container (buildx's docker-container driver), stopped when idle;
-  on Apple silicon, amd64 build steps run through Rosetta too
-- **Compose**: `up`, `down`, `ps`, `logs`, `exec`, multiple networks, events
+  `--platform` for one platform at a time; on Apple silicon, amd64 build
+  steps run through Rosetta too
+- **Compose**: `up` (with `--build` and `--wait`), `down`, `ps`, `logs`,
+  `exec`, `build:`, healthchecks, `depends_on` conditions
+  (`service_healthy`, `service_completed_successfully`), `platform:`,
+  multiple networks, events
 - **USB devices (beta)**: the USB tab hands a device (a serial adapter, a
   Zigbee stick, a development board) to your containers on Mac, Windows and
   Linux, and shows where it is inside Linux with the `--device` line to
