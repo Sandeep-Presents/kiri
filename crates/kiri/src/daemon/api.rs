@@ -33,6 +33,7 @@ pub fn serve(stream: UnixStream, engine: Arc<Engine>) -> io::Result<()> {
             engine.touch();
         }
         match route(&req, &engine, &mut w, &mut r) {
+            Ok(Next::KeepAlive) if req.wants_close() => return Ok(()),
             Ok(Next::KeepAlive) => {}
             Ok(Next::Close) => return Ok(()),
             Err(e) => {
