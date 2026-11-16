@@ -318,6 +318,20 @@ code network-dup 1 $D network create appnet
 $D rm -f db svc >/dev/null
 t network-rm "appnet" $D network rm appnet
 code network-rm-builtin 1 $D network rm bridge
+# A network removed while an --init container runs frees its DNS address
+# for the next network on that subnet (#248).
+$D network create initnet >/dev/null
+initsub=$($D network inspect initnet -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}')
+$D run -d --name initnetc --network initnet alpine sleep 60 >/dev/null
+$D run -d --name initkeep --init alpine sleep 60 >/dev/null
+$D rm -f initnetc >/dev/null; $D network rm initnet >/dev/null
+$D network create initnet2 >/dev/null
+t network-rm-init-same-subnet "$initsub" $D network inspect initnet2 -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+code network-rm-init-dns 0 $D run --rm --network initnet2 alpine true
+$D rm -f initkeep >/dev/null; $D network rm initnet2 >/dev/null
+# --init's PID 1 doesn't keep its own stdin open: cat sees the end of it
+# (a held one would leave cat to the timeout, exit 143).
+code init-stdin-eof 0 bash -c "echo x | $D run -i --rm --init alpine timeout 10 cat"
 # --internal: no default route, so anything beyond the network fails at once
 # (as with Docker), while the network itself still works.
 $D network create --internal intnet >/dev/null
