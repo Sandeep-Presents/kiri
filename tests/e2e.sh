@@ -600,6 +600,12 @@ t filter-label-none "0" bash -c "$D ps -q --filter label=team=zzz | wc -l | tr -
 t filter-label-and "1" bash -c "$D ps -q --filter label=team=a --filter label=tier=web | wc -l | tr -d ' '"
 t filter-label-key "2" bash -c "$D ps -q --filter label=team | wc -l | tr -d ' '"
 t filter-name "fb" $D ps --filter name=fb --format '{{.Names}}'
+# The name filter is a regular expression, as in Docker (#385): k3d finds its
+# nodes with `^[/]?<node>$` together with label filters.
+t filter-name-regex-k3d "fb" $D ps --filter 'name=^[/]?fb$' --filter label=team=b --format '{{.Names}}'
+t filter-name-regex-optional-slash "fa" $D ps --filter 'name=^/?fa$' --format '{{.Names}}'
+t filter-name-regex-class "2" bash -c "$D ps -q --filter 'name=^f[ab]$' | wc -l | tr -d ' '"
+t filter-name-regex-anchored "0" bash -c "$D ps -q --filter 'name=^[/]?f$' | wc -l | tr -d ' '"
 t filter-status-exited "fx" $D ps --filter status=exited --format '{{.Names}}'
 t filter-exited-code "fx" $D ps -a --filter exited=3 --format '{{.Names}}'
 t filter-ancestor "2" bash -c "$D ps -q --filter ancestor=alpine | wc -l | tr -d ' '"
