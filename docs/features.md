@@ -134,3 +134,24 @@ unless the Mac already has a docker CLI.
   (`--add-host name:172.18.0.1` on Windows and Linux, the default bridge's
   gateway; `198.19.248.254` on a Mac) or `DOCKER_BUILDKIT=0`, where Kiri
   maps `host-gateway` itself.
+
+- **`docker build --platform linux/amd64,linux/arm64` fails** with
+  `docker exporter does not currently support exporting manifest lists`:
+  Kiri's builder loads one platform into Kiri per build. Build each
+  platform with its own `--platform`, or write all of them to an OCI
+  archive with `-o type=oci,dest=image.tar` (Kiri's `docker load` does not
+  read OCI archives).
+
+- **A build that cannot reach a registry says `not found`.** When BuildKit
+  cannot reach the registry (for example, no DNS in the builder), a base
+  image Kiri doesn't hold fails with `failed to resolve source metadata for
+  docker.io/library/alpine:3.15: docker.io/library/alpine:3.15: not found`.
+  So does a digest-pinned base (`FROM alpine:3.13@sha256:...`) right after
+  `docker pull` fetched it by that digest. Kiri's builder asks Kiri's image
+  mirror first; the mirror has no answer for that tag or digest, and when
+  the registry then can't be reached BuildKit reports the mirror's
+  "not found" instead of the network error. A docker-container builder
+  with no mirror shows the real cause (`dial tcp: lookup
+  registry-1.docker.io ...`). The builder runs on the default bridge, so
+  check from a container there:
+  `docker run --rm alpine nslookup registry-1.docker.io`.
