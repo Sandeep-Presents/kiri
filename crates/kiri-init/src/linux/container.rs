@@ -84,6 +84,9 @@ pub struct Process {
     /// the host's and for execs. Says whether a namespace outlives this
     /// container (see `teardown`).
     pub netns: u64,
+    /// A container's own compiled seccomp program, empty when it runs under
+    /// the default. Its execs run under the same one.
+    pub seccomp: Vec<u8>,
     /// What to undo when a container exits; None for execs.
     teardown: Option<Teardown>,
 }
@@ -151,6 +154,9 @@ struct Prepared {
     /// Capabilities kept, one bit each.
     caps: u64,
     seccomp: bool,
+    /// The program the daemon compiled from the container's own profile;
+    /// empty for the built-in default.
+    profile: Vec<u8>,
     no_new_privs: bool,
     readonly_rootfs: bool,
     shm_size: u64,
@@ -293,6 +299,12 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
     let mut prepared = prepare(spec.argv, spec.env, spec.cwd, spec.user, Some(spec.hostname), spec.flags, spec.caps).map_err(cleanup)?;
     if !device_filtered {
         prepared.caps &= !(1 << super::devices::CAP_MKNOD);
+    }
+    // Looked at now, so a program the kernel would refuse fails the start
+    // with a message rather than the child.
+    if !spec.seccomp.is_empty() {
+        super::seccomp::check(spec.seccomp).map_err(cleanup)?;
+        prepared.profile = spec.seccomp.to_vec();
     }
     if spec.limits.shm_size > 0 {
         prepared.shm_size = spec.limits.shm_size;
@@ -455,6 +467,7 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
         dns_entries: (bridged && embedded_dns).then(|| (spec.net.bridge.to_owned(), spec.net.ip)).into_iter().collect(),
         veths,
         netns,
+        seccomp: spec.seccomp.to_vec(),
         teardown: Some(Teardown { base, cgroup, remove }),
     })
 }
@@ -531,7 +544,7 @@ pub(super) fn mount_rootfs(paths: &Paths, id: &str, image_layers: &[&str]) -> io
 }
 
 /// Starts a process inside a running container: same namespaces, same cgroup.
-pub fn exec(spec: &ExecSpec<'_>, target_pid: libc::pid_t, paths: &Paths) -> io::Result<Process> {
+pub fn exec(spec: &ExecSpec<'_>, target_pid: libc::pid_t, paths: &Paths, profile: &[u8]) -> io::Result<Process> {
     if spec.argv.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "no command to run"));
     }
@@ -553,6 +566,8 @@ pub fn exec(spec: &ExecSpec<'_>, target_pid: libc::pid_t, paths: &Paths) -> io::
     // The container's ulimits and groups apply to its execs too, as with runc.
     let host = super::hostopts::parse(spec.opts)?;
     prepared.host = HostApplied { rlimits: host.rlimits, groups: host.groups, nodes: Vec::new() };
+    // An exec runs under its container's profile, not the default.
+    prepared.profile = profile.to_vec();
     let (parent_io, child_io) = stdio(&prepared)?;
     let args = CloneArgs {
         flags: CLONE_INTO_CGROUP,
@@ -608,6 +623,7 @@ pub fn exec(spec: &ExecSpec<'_>, target_pid: libc::pid_t, paths: &Paths) -> io::
         dns_entries: Vec::new(),
         veths: Vec::new(),
         netns: 0,
+        seccomp: Vec::new(),
         teardown: None,
     })
 }
@@ -824,6 +840,7 @@ fn prepare(argv: StrList<'_>, env: StrList<'_>, cwd: &str, user: &str, hostname:
         privileged: flags & run_flags::PRIVILEGED != 0,
         caps: if caps == 0 { default_caps() } else { caps },
         seccomp: flags & (run_flags::PRIVILEGED | run_flags::NO_SECCOMP) == 0,
+        profile: Vec::new(),
         no_new_privs: flags & run_flags::NO_NEW_PRIVS != 0,
         readonly_rootfs: flags & run_flags::READONLY_ROOTFS != 0,
         shm_size: 64 << 20,
@@ -1330,10 +1347,21 @@ fn finish_child(p: &Prepared, io: &ChildStdio, console: bool) -> ! {
             fail("no-new-privileges", io::Error::last_os_error());
         }
     }
-    // While still root with CAP_SYS_ADMIN, which installing a filter needs.
-    // Without the default profile the host boundary stays: vsock is not
-    // namespaced, and privileges inside the VM are no reason to reach the host.
-    super::seccomp::install(p.seccomp.then_some(p.caps)).unwrap_or_else(|e| fail("seccomp", e));
+    // As runc: a container's own profile is installed while still root with
+    // CAP_SYS_ADMIN, which installing a filter needs, unless the container has
+    // no-new-privileges. Then it is installed as late as possible, right
+    // before execve, after the user switch and the capability drop. The host
+    // boundary always goes first: vsock is not namespaced, and privileges
+    // inside the VM are no reason to reach the host.
+    let late_profile = p.no_new_privs && !p.profile.is_empty();
+    if p.profile.is_empty() {
+        super::seccomp::install(p.seccomp.then_some(p.caps))
+    } else if late_profile {
+        super::seccomp::install_boundary()
+    } else {
+        super::seccomp::install_profile(&p.profile)
+    }
+    .unwrap_or_else(|e| fail("seccomp", e));
     let (uid, gid) = resolve_user(&p.user).unwrap_or_else(|e| fail("user", e));
     // The user's /etc/group memberships and --group-add, as Docker gives them.
     let groups = super::hostopts::supplementary_groups(&p.user, uid, &p.host.groups).unwrap_or_else(|e| fail("groups", e));
@@ -1368,7 +1396,13 @@ fn finish_child(p: &Prepared, io: &ChildStdio, console: bool) -> ! {
         envp.push(h.as_ptr());
     }
     envp.push(std::ptr::null());
+    let install_late = || {
+        if late_profile {
+            super::seccomp::install_late(&p.profile).unwrap_or_else(|e| fail("seccomp", e));
+        }
+    };
     if console && p.init {
+        install_late();
         super::pid1::run(&exe, argv.as_ptr(), envp.as_ptr(), p.tty);
     }
     // The program starts as Docker would start it: nothing blocked and
@@ -1383,6 +1417,7 @@ fn finish_child(p: &Prepared, io: &ChildStdio, console: bool) -> ! {
         libc::sigemptyset(&mut none);
         libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
     }
+    install_late();
     // SAFETY: NULL-terminated arrays of valid C strings that outlive the call.
     unsafe { libc::execve(exe.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
     sys::exec_fail(2, &exe, io::Error::last_os_error(), false)
@@ -1782,7 +1817,7 @@ mod tests {
     fn resolv(flags: u32, opts: &[&str], upstream: &[[u8; 4]]) -> String {
         let mut buf = Vec::new();
         let net = Net { bridge: "kiri1", ip: [10, 5, 0, 2], prefix: 24, gateway: [10, 5, 0, 1], extra_hosts: &[], dns_names: &[], opts };
-        encode_run(&mut buf, "c1", &[], &["sh"], &[], "/", "", "c1", flags, net, &[], &Limits::default(), 0, &[] as &[&str]);
+        encode_run(&mut buf, "c1", &[], &["sh"], &[], "/", "", "c1", flags, net, &[], &Limits::default(), 0, &[] as &[&str], &[]);
         let Ok(Msg::Run(spec)) = decode(&buf) else { panic!() };
         super::resolv_conf(&spec, upstream, (flags & run_flags::DNS_GATEWAY != 0).then_some(super::super::dns::EMBEDDED))
     }
@@ -1801,7 +1836,7 @@ mod tests {
     fn a_resolver_at_one_of_the_hosts_own_addresses_goes_through_the_agent() {
         let mut buf = Vec::new();
         let net = Net { bridge: "kiri0", ip: [172, 17, 0, 2], prefix: 16, gateway: [172, 17, 0, 1], extra_hosts: &[], dns_names: &[], opts: &[] };
-        encode_run(&mut buf, "c1", &[], &["sh"], &[], "/", "", "c1", 0, net, &[], &Limits::default(), 0, &[] as &[&str]);
+        encode_run(&mut buf, "c1", &[], &["sh"], &[], "/", "", "c1", 0, net, &[], &Limits::default(), 0, &[] as &[&str], &[]);
         let Ok(Msg::Run(spec)) = decode(&buf) else { panic!() };
         // TEST-NET-3: no machine running the tests has it.
         assert!(!super::embedded_dns(&spec, &[[203, 0, 113, 53]], false), "a resolver elsewhere is asked directly");
@@ -1813,7 +1848,7 @@ mod tests {
         let spec_with = |flags: u32, opts: &[&str], f: &dyn Fn(&kiri_proto::RunSpec<'_>)| {
             let mut buf = Vec::new();
             let net = Net { bridge: "kiri0", ip: [172, 17, 0, 2], prefix: 16, gateway: [172, 17, 0, 1], extra_hosts: &[], dns_names: &[], opts };
-            encode_run(&mut buf, "c1", &[], &["sh"], &[], "/", "", "c1", flags, net, &[], &Limits::default(), 0, &[] as &[&str]);
+            encode_run(&mut buf, "c1", &[], &["sh"], &[], "/", "", "c1", flags, net, &[], &Limits::default(), 0, &[] as &[&str], &[]);
             let Ok(Msg::Run(spec)) = decode(&buf) else { panic!() };
             f(&spec);
         };

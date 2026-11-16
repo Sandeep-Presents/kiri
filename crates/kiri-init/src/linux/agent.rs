@@ -386,9 +386,10 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                 Ok(Msg::Exec(spec)) => {
                     // Its namespaces are entered through /proc/<pid>: only a
                     // container still running, never one exited under a freed pid.
-                    match running_pid(&procs, spec.container_id) {
+                    // The container's own seccomp profile goes with it, if it has one.
+                    match running_pid(&procs, spec.container_id).and_then(|pid| procs.get(&pid).map(|p| (pid, p.run.seccomp.clone()))) {
                         None => Msg::Error(&format!("container {} is not running", spec.container_id)).encode(&mut out),
-                        Some(pid) => match container::exec(&spec, pid, paths) {
+                        Some((pid, profile)) => match container::exec(&spec, pid, paths, &profile) {
                             Ok(run) => {
                                 let cloned_ns = sys::boottime_ns();
                                 Msg::Started { id: &run.id, pid: run.pid as u32 }.encode(&mut out);
