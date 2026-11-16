@@ -167,6 +167,23 @@ impl Store {
         std::fs::read(path)
     }
 
+    /// The image's `config.Labels`, as the Docker Engine API shows them: the
+    /// map for an image that has labels, null for one without (as Docker's
+    /// inspect does for an image with no LABEL, alpine, say) and when the
+    /// config blob is missing or unreadable. Read from the stored config blob
+    /// on demand — the index never held them, so an image that arrived before
+    /// this was read keeps its labels too.
+    pub fn labels(&self, digest: &str) -> serde_json::Value {
+        self.read_config(digest)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|c| {
+                let labels = c["config"]["Labels"].as_object()?;
+                (!labels.is_empty()).then(|| serde_json::Value::Object(labels.clone()))
+            })
+            .unwrap_or(serde_json::Value::Null)
+    }
+
     pub fn blob_path(&self, digest: &str) -> io::Result<PathBuf> {
         Ok(self.root.join("blobs/sha256").join(digest_hex(digest)?))
     }
@@ -487,5 +504,47 @@ mod tests {
         assert_eq!(named("localhost:5000/app:1").repo(), "localhost:5000/app");
         assert_eq!(named("localhost:5000/app").repo(), "localhost:5000/app");
         assert_eq!(named(&format!("kindest/node@sha256:{}", "a".repeat(64))).repo(), "kindest/node");
+    }
+
+    #[test]
+    fn labels_come_from_the_config_blob() {
+        use serde_json::{Value, json};
+        use std::io::Write as _;
+        let root =
+            std::env::temp_dir().join(format!("kiri-store-labels-test-{}", std::process::id()));
+        let store = Store::open(&root).unwrap();
+        let put = |labels: Value| {
+            let bytes = serde_json::to_vec(&json!({"config": {"Labels": labels}})).unwrap();
+            let digest = sha256_digest(&bytes);
+            let mut w = store.blob_writer(&digest).unwrap();
+            w.write_all(&bytes).unwrap();
+            w.finish().unwrap();
+            digest
+        };
+        // The record carries no labels, as older versions wrote it: they
+        // live only in the config blob.
+        let image = |digest: String| Image {
+            name: "labelled:1".into(),
+            digest: format!("sha256:{}", "1".repeat(64)),
+            index_digest: None,
+            config_digest: digest,
+            layers: Vec::new(),
+            size: 0,
+            platform: "linux/arm64".into(),
+            created: String::new(),
+            pulled_at: 0,
+            config: RunConfig::default(),
+        };
+        let labelled = put(json!({"com.example.label": "1"}));
+        store.put_image(image(labelled.clone())).unwrap();
+        assert_eq!(store.labels(&labelled), json!({"com.example.label": "1"}));
+        // A config without Labels, and a digest with no blob at all.
+        let plain = put(Value::Null);
+        assert_eq!(store.labels(&plain), Value::Null);
+        assert_eq!(
+            store.labels(&format!("sha256:{}", "3".repeat(64))),
+            Value::Null
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 }
