@@ -46,6 +46,14 @@ t("the page has no Filter box: the strip's search narrows the list", () => {
   q.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   if (q.value || ui.filter) throw new Error("not cleared");
 });
+t("the search field keeps native text selection and undo", () => {
+  const q = $("gq");
+  if (getComputedStyle(q).userSelect !== "text" || getComputedStyle(q).webkitUserSelect !== "text") throw new Error("text selection is disabled");
+  q.focus(); q.value = "alpha"; q.select();
+  if (!document.execCommand("insertText", false, "beta") || q.value !== "beta") throw new Error("could not edit");
+  if (!document.execCommand("undo") || q.value !== "alpha") throw new Error("undo did not restore the value");
+  q.value = ""; q.dispatchEvent(new Event("input", { bubbles: true }));
+});
 t("⌘K / Ctrl+K goes to it", () => {
   document.body.focus();
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: !WIN, ctrlKey: WIN, bubbles: true }));

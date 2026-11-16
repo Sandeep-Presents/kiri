@@ -457,8 +457,18 @@ mod tests {
             assert!(!m.is_empty(), "lang/{tag}.json is empty");
         }
         assert_eq!(tr("zh-Hans", "Settings…"), "设置…");
-        for (tag, _) in FILES {
-            assert_ne!(tr(tag, "Settings…"), "Settings…", "lang/{tag}.json lacks Settings…");
+        for word in [
+            "Settings…",
+            "Undo",
+            "Redo",
+            "Cut",
+            "Copy",
+            "Paste",
+            "Select All",
+        ] {
+            for (tag, _) in FILES {
+                assert_ne!(tr(tag, word), word, "lang/{tag}.json lacks {word}");
+            }
         }
         assert_eq!(tr("en", "Settings…"), "Settings…");
         assert_eq!(tr("zh-Hans", "no such words"), "no such words");

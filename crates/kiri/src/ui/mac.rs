@@ -257,7 +257,9 @@ fn show_window(mtm: MainThreadMarker) {
 }
 
 /// The app menu, so the standard shortcuts work: ⌘Q quits (the daemon keeps
-/// running), ⌘W closes, ⌘H hides, ⌘, opens Settings.
+/// running), ⌘W closes, ⌘H hides, ⌘, opens Settings. The Edit menu is also
+/// required: AppKit sends the standard text actions for ⌘A, ⌘Z and friends
+/// through the responder chain to the focused WKWebView input.
 fn main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let l = super::lang::resolve(prefs()["lang"].as_str());
     let tr = |en: &str| super::lang::tr(l, en);
@@ -285,6 +287,21 @@ fn main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     app_menu.addItem(&item(&app("Quit {app}"), sel!(terminate:), "q"));
     let app_item = NSMenuItem::new(mtm);
     app_item.setSubmenu(Some(&app_menu));
+
+    // Standard text actions go through the first responder, which is the
+    // WKWebView's focused input when the search field has focus.
+    let edit_menu = NSMenu::new(mtm);
+    edit_menu.setTitle(&NSString::from_str(&tr("Edit")));
+    edit_menu.addItem(&item(&tr("Undo"), sel!(undo:), "z"));
+    edit_menu.addItem(&item(&tr("Redo"), sel!(redo:), "Z"));
+    edit_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    edit_menu.addItem(&item(&tr("Cut"), sel!(cut:), "x"));
+    edit_menu.addItem(&item(&tr("Copy"), sel!(copy:), "c"));
+    edit_menu.addItem(&item(&tr("Paste"), sel!(paste:), "v"));
+    edit_menu.addItem(&item(&tr("Select All"), sel!(selectAll:), "a"));
+    let edit_item = NSMenuItem::new(mtm);
+    edit_item.setSubmenu(Some(&edit_menu));
+
     // View: ⌘+ / ⌘− / ⌘0 step the text size Settings → Appearance sets.
     let view_menu = NSMenu::new(mtm);
     view_menu.setTitle(&NSString::from_str(&tr("View")));
@@ -295,6 +312,7 @@ fn main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     view_item.setSubmenu(Some(&view_menu));
     let bar = NSMenu::new(mtm);
     bar.addItem(&app_item);
+    bar.addItem(&edit_item);
     bar.addItem(&view_item);
     bar
 }
