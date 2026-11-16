@@ -597,6 +597,8 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                                 }
                                 if let Some(p) = procs.get_mut(&pid) {
                                     p.run.dns_entries.push((n.bridge.to_owned(), n.ip));
+                                    p.run.uplinks.retain(|u| u.veth != host_if);
+                                    p.run.uplinks.extend(net::Uplink::of(&host_if, ifname, n.gateway, v6, plug));
                                     p.run.veths.push(host_if.clone());
                                 }
                                 Msg::Ack.encode(&mut out)
@@ -625,7 +627,15 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                             p.run.veths.retain(|v| *v != host_if);
                         }
                         match net::detach(&host_if) {
-                            Ok(()) => Msg::Ack.encode(&mut out),
+                            Ok(()) => {
+                                if let Some(p) = procs.get_mut(&pid) {
+                                    // Unplugged already: a route that cannot move is no reason to fail the disconnect.
+                                    if let Err(e) = net::hand_over_default_routes(pid, &mut p.run.uplinks, &host_if) {
+                                        eprintln!("kiri-init: moving {id}'s default route after a disconnect: {e}");
+                                    }
+                                }
+                                Msg::Ack.encode(&mut out)
+                            }
                             Err(e) => Msg::Error(&format!("disconnect: {e}")).encode(&mut out),
                         }
                     }
