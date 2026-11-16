@@ -115,6 +115,7 @@ impl Process {
             dns_entries: Vec::new(),
             veths: Vec::new(),
             netns: 0,
+            seccomp: Vec::new(),
             teardown: None,
         }
     }
