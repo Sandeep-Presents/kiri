@@ -14,6 +14,11 @@
 *.zip
 *.tar.gz
 
+# Python bytecode and caches from helper scripts: never in the repo.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Local assistant notes (each machine keeps its own)
 CLAUDE.md
 CLAUDE.local.md
