@@ -896,7 +896,7 @@ fn resolv_conf(spec: &RunSpec<'_>, upstream: &[[u8; 4]], embedded: Option<[u8; 4
 }
 
 /// One mount, resolved before clone.
-struct Mount {
+pub(super) struct Mount {
     /// A guest path, or None for a tmpfs.
     source: Option<CString>,
     /// Relative to the container root (the child mounts before pivot_root).
@@ -917,7 +917,7 @@ struct Mount {
 /// flags (`noexec`, `exec`, `nosuid`, …; later ones win). A volume with
 /// driver options adds `\ttype\tdevice\tflags(hex)\tdata`, and is mounted
 /// at its source first.
-fn parse_mounts(list: StrList<'_>) -> io::Result<Vec<Mount>> {
+pub(super) fn parse_mounts(list: StrList<'_>) -> io::Result<Vec<Mount>> {
     let mut out = Vec::with_capacity(list.len());
     for m in list.iter() {
         let mut parts = m.split('\t');
@@ -997,11 +997,21 @@ fn tmpfs_flags(words: &[&str]) -> libc::c_ulong {
 /// pivot_root), creating the target as a directory or an empty file. The
 /// target is looked up inside `root`, so an image's symlink cannot point
 /// the mount, the copy-up or the new directory outside the container.
-fn apply_mount(root: BorrowedFd<'_>, image: Option<BorrowedFd<'_>>, m: &Mount) -> io::Result<()> {
+pub(super) fn apply_mount(
+    root: BorrowedFd<'_>,
+    image: Option<BorrowedFd<'_>>,
+    m: &Mount,
+) -> io::Result<()> {
     let t = Path::new(std::ffi::OsStr::from_bytes(m.target.to_bytes()));
     if let Some(opts) = &m.tmpfs_opts {
         let at = inroot::open(root, t, Last::Dir)?;
-        return sys::mount(c"tmpfs", &at.proc_path(), c"tmpfs", m.tmpfs_flags, Some(opts));
+        return sys::mount(
+            c"tmpfs",
+            &at.proc_path(),
+            c"tmpfs",
+            m.tmpfs_flags,
+            Some(opts),
+        );
     }
     let src = m.source.as_ref().expect("bind mounts have a source");
     let at = inroot::open(root, t, if m.dir { Last::Dir } else { Last::File })?;
@@ -1035,6 +1045,32 @@ fn apply_mount(root: BorrowedFd<'_>, image: Option<BorrowedFd<'_>>, m: &Mount) -
         // to reach the mount itself.
         let at = inroot::open(root, t, Last::Exists)?;
         sys::mount(c"none", &at.proc_path(), c"none", libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC, None)?;
+    }
+    Ok(())
+}
+
+/// The container's mounts as a copy applies them: every volume and bind a
+/// start would put in place, and none of them filled from the image. Filling
+/// a volume from the image is what a start does the first time a volume is
+/// used; the archive endpoint mounts a volume as it already is. A tmpfs is
+/// left out because it goes away with the container: Docker's archive
+/// endpoint sees the image's own directory there, not an empty mount.
+pub(super) fn copy_mounts(list: StrList<'_>) -> io::Result<Vec<Mount>> {
+    let mut mounts = parse_mounts(list)?;
+    // The image's file at a tmpfs' path, as Docker's endpoint finds it.
+    mounts.retain(|m| m.source.is_some());
+    for m in &mut mounts {
+        m.copy_up = false;
+    }
+    Ok(mounts)
+}
+
+/// Puts `mounts` in place in a container root a copy has entered, through
+/// the container's own tree as `container_child` does: the same volume and
+/// bind mounts, so a path under one resolves as the container sees it.
+pub(super) fn mount_for_copy(root: BorrowedFd<'_>, mounts: &[Mount]) -> io::Result<()> {
+    for m in mounts {
+        apply_mount(root, None, m)?;
     }
     Ok(())
 }

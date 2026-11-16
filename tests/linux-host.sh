@@ -60,6 +60,15 @@ t cp-during-restart "during=1 after=0" "id=\$(docker run -d alpine sleep 60); py
 # back: rm then deletes it and leaves nothing mounted.
 t failed-start-frees-root "gone mounts=0" "docker rm -f kiri-badsysctl >/dev/null 2>&1; docker run -d --name kiri-badsysctl --sysctl net.ipv4.kiri_no_such_key=1 alpine true >/dev/null 2>&1; id=\$(docker inspect -f '{{.Id}}' kiri-badsysctl); docker rm -f kiri-badsysctl >/dev/null; for i in \$(seq 20); do test -e /var/lib/kiri/containers/\$id || break; sleep 0.1; done; test -e /var/lib/kiri/containers/\$id && printf kept || printf gone; echo \" mounts=\$($mounts)\""
 t cp-stopped-unmounts "after=0" "id=\$(docker create alpine true); docker cp /etc/hostname \$id:/f >/dev/null; for i in \$(seq 20); do [ \$($mounts) = 0 ] && break; sleep 0.1; done; echo after=\$($mounts); docker rm \$id >/dev/null"
+# A named volume is the container's own filesystem: a copy reaches a file in
+# one on a created and a stopped container, as Docker's archive endpoint
+# does (a running container already resolved through /proc), and a copy in
+# writes to the volume. An export is the container's filesystem without its
+# mounts, so the volume stays out (#245).
+t cp-volume-created "17" "docker volume rm kiri-cp-vol >/dev/null 2>&1; docker volume create kiri-cp-vol >/dev/null; docker run --rm -v kiri-cp-vol:/data alpine sh -c 'echo 17 > /data/PG_VERSION' >/dev/null; id=\$(docker create -v kiri-cp-vol:/data alpine true); docker cp \$id:/data/PG_VERSION - | tar -xO; docker rm \$id >/dev/null; echo"
+t cp-volume-stopped "17" "id=\$(docker run -d -v kiri-cp-vol:/data alpine sh -c 'echo 17 > /data/PG_VERSION; sleep 5'); for i in \$(seq 20); do test \$(docker inspect -f '{{.State.Running}}' \$id) = false && break; sleep 0.2; done; docker cp \$id:/data/PG_VERSION - | tar -xO; docker rm -f \$id >/dev/null; echo"
+t cp-volume-in "written" "id=\$(docker create -v kiri-cp-vol:/data alpine true); echo -n written > /tmp/w; docker cp /tmp/w \$id:/data/w; docker rm \$id >/dev/null; docker run --rm -v kiri-cp-vol:/data alpine cat /data/w; echo"
+t cp-volume-export "absent" "id=\$(docker create -v kiri-cp-vol:/data alpine true); docker export \$id | tar -t | grep -q '^data/' && printf present || printf absent; docker rm \$id >/dev/null; docker volume rm kiri-cp-vol >/dev/null; echo"
 t commit-renamed-dir "kept" "docker rm -f kiri-rename >/dev/null 2>&1; docker run --name kiri-rename alpine mv /etc/apk /etc/apk2; docker commit kiri-rename kiri-rename-test >/dev/null; docker rm -f kiri-rename >/dev/null; docker run --rm kiri-rename-test sh -c 'test -f /etc/apk2/repositories && echo kept'; docker rmi kiri-rename-test >/dev/null"
 # A container and an exec each lead their own session, so killpg from inside
 # never reaches the daemon (#191).
