@@ -753,6 +753,17 @@ EXTERNAL_GATEWAY=$($D network inspect na -f '{{range .IPAM.Config}}{{.Gateway}}{
 t internal-first-external-default "default via $EXTERNAL_GATEWAY dev eth1" $D exec late-egress ip -4 route show default
 $D restart -t 1 late-egress >/dev/null
 t internal-first-external-restart "default via $EXTERNAL_GATEWAY dev eth1" $D exec late-egress ip -4 route show default
+# Leaving the only outside network takes the route; a second outside network
+# keeps it where it is; leaving the network that holds it hands it on, as
+# Docker does.
+$D network disconnect na late-egress
+t disconnect-last-external-no-default "none" $D exec late-egress sh -c 'ip -4 route show default | grep -q default && echo default || echo none'
+$D network connect na late-egress
+$D network connect nb late-egress
+t internal-first-second-external "default via $EXTERNAL_GATEWAY dev eth1" $D exec late-egress ip -4 route show default
+NB_GATEWAY=$($D network inspect nb -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}')
+$D network disconnect na late-egress
+t disconnect-hands-default-on "default via $NB_GATEWAY dev eth2" $D exec late-egress ip -4 route show default
 $D rm -f late-egress >/dev/null; $D network rm ni >/dev/null
 $D rm -f multi >/dev/null; $D network rm na nb >/dev/null
 
