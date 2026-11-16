@@ -808,6 +808,19 @@ pub(super) fn valid_id(id: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Creates `cwd` and its parents, 0755, when it is missing. Errors are left
+/// to the chdir after the user switch, which reports them.
+fn make_workdir(cwd: &std::ffi::CStr) {
+    // SAFETY: a valid NUL-terminated path.
+    if unsafe { libc::access(cwd.as_ptr(), libc::F_OK) } == 0 {
+        return;
+    }
+    use std::os::unix::fs::DirBuilderExt;
+    // SAFETY: the bytes came from a &str, so they are valid UTF-8.
+    let dir = unsafe { std::ffi::OsStr::from_encoded_bytes_unchecked(cwd.to_bytes()) };
+    let _ = fs::DirBuilder::new().recursive(true).mode(0o755).create(dir);
+}
+
 fn prepare(argv: StrList<'_>, env: StrList<'_>, cwd: &str, user: &str, hostname: Option<&str>, flags: u32, caps: u64) -> io::Result<Prepared> {
     let c = |s: &str| CString::new(s).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "argument contains NUL"));
     let argv = argv.iter().map(c).collect::<io::Result<Vec<_>>>()?;
@@ -1229,6 +1242,10 @@ fn container_child(p: &Prepared, rootfs: &CStr, io: &ChildStdio) -> ! {
         libc::umount2(c".".as_ptr(), libc::MNT_DETACH);
         libc::chdir(c"/".as_ptr());
     }
+    // Docker creates a missing working directory (mkdir -p) as root, 0755,
+    // before it switches user and before the root goes read-only, so both
+    // `-u 1000 -w /missing` and `--read-only -w /missing` start (#370).
+    make_workdir(&p.cwd);
     if p.readonly_rootfs {
         // Only the root itself: volumes, tmpfs and /dev stay as they are.
         sys::mount(c"none", c"/", c"none", libc::MS_REMOUNT | libc::MS_BIND | libc::MS_RDONLY, None).unwrap_or_else(|e| fail("read-only root", e));

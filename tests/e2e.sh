@@ -95,6 +95,8 @@ t pull-alpine "alpine:latest" $D pull alpine:latest
 t pull-busybox "busybox" $D pull busybox
 t pull-tag "3.21" $D pull alpine:3.21
 t images-list "alpine" $D images
+# Newest first, as Docker lists them (#364).
+t images-newest-first "sorted" bash -c "$D images --format '{{.CreatedAt}}' | sort -rc && echo sorted"
 t image-inspect-arch "$($D version -f '{{.Server.Arch}}')" $D image inspect -f '{{.Architecture}}' alpine
 t image-inspect-cmd "/bin/sh" $D image inspect -f '{{.Config.Cmd}}' alpine
 code pull-missing 1 $D pull kiri-does-not-exist/nope:none
@@ -130,6 +132,12 @@ t env "bar" $D run --rm -e FOO=bar alpine sh -c 'echo $FOO'
 t env-image "PATH=/usr/local/sbin" $D run --rm alpine env
 t workdir "/tmp" $D run --rm -w /tmp alpine pwd
 t workdir-created "/made/here" $D run --rm -w /made/here alpine pwd
+# A non-root user gets the missing directory too, made by root as 0755 (#370).
+t workdir-created-nonroot "/made/for/1000" $D run --rm -u 1000:1000 -w /made/for/1000 alpine pwd
+t workdir-created-nonroot-mode "755 root" $D run --rm -u 1000:1000 -w /made/x alpine stat -c '%a %U' /made/x
+# ... and with a read-only root, made before the root goes read-only, as in Docker.
+t workdir-created-readonly "/made/ro" $D run --rm --read-only -w /made/ro alpine pwd
+t workdir-created-readonly-nonroot "/made/ro/1000" $D run --rm --read-only -u 1000:1000 -w /made/ro/1000 alpine pwd
 t user-numeric "uid=1000" $D run --rm -u 1000 alpine id
 t user-name "uid=70(postgres)" $D run --rm -u postgres postgres:17-alpine id
 t user-group "gid=0(root)" $D run --rm -u 1000:0 alpine id

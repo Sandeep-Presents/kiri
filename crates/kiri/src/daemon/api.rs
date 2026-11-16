@@ -473,7 +473,9 @@ pub(super) fn reference_matches(pattern: &str, name: &str) -> bool {
 
 fn images(req: &Request, engine: &Engine) -> Result<Value, Error> {
     let f = filters(req, &["reference", "dangling", "label"])?;
-    let list = engine.store.images()?;
+    let mut list = engine.store.images()?;
+    // Newest first, as Docker lists them (#364).
+    list.sort_by_key(|i| std::cmp::Reverse(time::parse_unix(&i.created)));
     // Every stored image is tagged, so there are no dangling ones.
     if f.bool("dangling") == Some(true) {
         return Ok(json!([]));
