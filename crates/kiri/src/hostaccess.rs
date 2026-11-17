@@ -11,6 +11,9 @@
 //! 4. The socket's access list, with `user` on it (crate::daemon::access), so
 //!    the change applies now, without signing in again.
 //!
+//! `--restart` restarts a running engine as well (the window's Restart
+//! engine, after the package was upgraded), and waits for it to answer.
+//!
 //! Exit status: 0 done; 10 done, but this system keeps no access lists, so
 //! `user` must log out and back in once before Kiri lets them in.
 
@@ -26,10 +29,14 @@ const SOCKET: &str = crate::client::SERVICE_SOCKET;
 pub const SIGN_IN_AGAIN: u8 = 10;
 
 pub fn run(args: &[String]) -> io::Result<u8> {
-    let [user] = args else { return Err(io::Error::other("usage: kiri host-access USER")) };
+    let (restart, args) = match args {
+        [flag, rest @ ..] if flag == "--restart" => (true, rest),
+        _ => (false, args),
+    };
+    let [user] = args else { return Err(io::Error::other("usage: kiri host-access [--restart] USER")) };
     // SAFETY: geteuid has no preconditions.
     if unsafe { libc::geteuid() } != 0 {
-        return Err(io::Error::other(format!("needs root: sudo kiri host-access {user}")));
+        return Err(io::Error::other(format!("needs root: sudo kiri host-access {}{user}", if restart { "--restart " } else { "" })));
     }
     if crate::daemon::access::uid(user).is_none() {
         return Err(io::Error::other(format!("no account named {user}")));
@@ -45,7 +52,7 @@ pub fn run(args: &[String]) -> io::Result<u8> {
         }
         println!("{user} is in the {GROUP} group");
     }
-    engine()?;
+    engine(restart)?;
     match crate::daemon::access::grant(Path::new(SOCKET), GROUP) {
         Ok(_) => {
             println!("{user} can use Kiri now");
@@ -59,9 +66,10 @@ pub fn run(args: &[String]) -> io::Result<u8> {
     }
 }
 
-/// The engine running and answering on its socket.
-fn engine() -> io::Result<()> {
-    if answers() {
+/// The engine running and answering on its socket; with `restart`, a
+/// running one restarted (on the binary the package installed).
+fn engine(restart: bool) -> io::Result<()> {
+    if answers() && !restart {
         return Ok(());
     }
     let active = Command::new("systemctl").args(["is-active", "--quiet", "kiri"]).status().is_ok_and(|s| s.success());

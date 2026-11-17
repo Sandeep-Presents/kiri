@@ -63,6 +63,7 @@
   "After the restart": "Yeniden başlattıktan sonra",
   "Age": "Yaş",
   "All": "Tümü",
+  "All languages · {n}": "Tüm diller · {n}",
   "All levels": "Tüm düzeyler",
   "All statuses": "Tüm durumlar",
   "All steps": "Tüm adımlar",
@@ -613,6 +614,8 @@
   "No fix yet": "Henüz düzeltme yok",
   "No images yet": "Henüz görüntü yok",
   "No known vulnerabilities in {n} packages": "{n} pakette bilinen güvenlik açığı yok",
+  "No language matches. Try its English name.": "Eşleşen dil yok. İngilizce adını deneyin.",
+  "No languages match": "Eşleşen dil yok",
   "No lines match.": "Eşleşen satır yok.",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "Henüz ayna yok: Docker Hub görüntüleri doğrudan Docker Hub’dan gelir.",
   "No networks yet": "Henüz ağ yok",
@@ -908,6 +911,7 @@
   "Search Kiri": "Kiri'de ara",
   "Search Kiri…": "Kiri'de ara…",
   "Search containers, images…": "Kapsayıcılarda, görüntülerde ara…",
+  "Search languages": "Dil ara",
   "Search {view}…": "Ara: {view}…",
   "Searching Docker Hub": "Docker Hub'da aranıyor",
   "Security": "Güvenlik",
@@ -1091,6 +1095,7 @@
   "Storage": "Depolama",
   "Strong enough": "Yeterince güçlü",
   "Subnet": "Alt ağ",
+  "Suggested": "Önerilen",
   "Switch and import": "Geç ve içe aktar",
   "Switch and import {n} item": "Geç ve {n} öğeyi içe aktar",
   "Switch and import {n} items": "Geç ve {n} öğeyi içe aktar",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— günlük akışı sona erdi —",
   "‹ Back": "‹ Geri",
   "★ Star on GitHub": "★ GitHub'da yıldız ver",
-  "✓ Installed": "✓ Yüklendi"
+  "✓ Installed": "✓ Yüklendi",
+  "Waiting to come back": "Geri gelmesi bekleniyor",
+  "Stop waiting": "Beklemeyi bırak",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri geri geldiğinde onu yeniden bağlar. Bu bilgisayarda kalması için beklemeyi bırakın."
 }

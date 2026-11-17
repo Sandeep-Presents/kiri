@@ -33,6 +33,7 @@ pub fn serve(stream: UnixStream, engine: Arc<Engine>) -> io::Result<()> {
             engine.touch();
         }
         match route(&req, &engine, &mut w, &mut r) {
+            Ok(Next::KeepAlive) if req.wants_close() => return Ok(()),
             Ok(Next::KeepAlive) => {}
             Ok(Next::Close) => return Ok(()),
             Err(e) => {
@@ -69,12 +70,23 @@ pub(super) fn reply(w: &mut UnixStream, result: Result<Value, Error>, ok: u16) -
 }
 
 pub(super) fn error(w: &mut UnixStream, e: Error) -> io::Result<()> {
+    let (status, m) = status_of(e);
+    http::error(w, status, &m)
+}
+
+/// `error` for a request whose connection closes after it (`http::CLOSE`).
+pub(super) fn error_closing(w: &mut UnixStream, e: Error) -> io::Result<()> {
+    let (status, m) = status_of(e);
+    http::error_closing(w, status, &m)
+}
+
+fn status_of(e: Error) -> (u16, String) {
     match e {
-        Error::NotFound(m) => http::error(w, 404, &m),
-        Error::Conflict(m) => http::error(w, 409, &m),
-        Error::BadRequest(m) => http::error(w, 400, &m),
-        Error::Unauthorized(m) => http::error(w, 401, &m),
-        Error::Io(e) => http::error(w, 500, &e.to_string()),
+        Error::NotFound(m) => (404, m),
+        Error::Conflict(m) => (409, m),
+        Error::BadRequest(m) => (400, m),
+        Error::Unauthorized(m) => (401, m),
+        Error::Io(e) => (500, e.to_string()),
     }
 }
 
@@ -195,6 +207,11 @@ fn route(req: &Request, engine: &Arc<Engine>, w: &mut UnixStream, r: &mut BufRea
         ("POST", "/volumes/prune") => return reply(w, volume_prune(req, engine), 200),
         _ => {}
     }
+    if let Some(name) = p.strip_prefix("/distribution/").and_then(|r| r.strip_suffix("/json")) {
+        if m == "GET" {
+            return reply(w, distribution(req, name), 200);
+        }
+    }
     if let Some(rest) = p.strip_prefix("/images/") {
         if let Some(name) = rest.strip_suffix("/json") {
             if m == "GET" {
@@ -221,16 +238,35 @@ fn route(req: &Request, engine: &Arc<Engine>, w: &mut UnixStream, r: &mut BufRea
         match (m, action) {
             ("GET", "json") => return reply(w, container_inspect(engine, id), 200),
             ("POST", "start") => {
+                // An idle BuildKit container that Kiri paused itself counts
+                // as running: the next build resumes it.
+                match engine.with(id, |c| (c.status == Status::Running, c.paused && !super::engine::is_builder(c))) {
+                    Ok((_, true)) => return reply(w, Err(Error::Conflict("cannot start a paused container, try unpause instead".into())), 204),
+                    Ok((true, _)) => {
+                        http::respond(w, 304, "", b"")?;
+                        return Ok(Next::KeepAlive);
+                    }
+                    Err(e) => return reply(w, Err(e), 204),
+                    _ => {}
+                }
                 super::builder::before_start(engine, id);
                 return reply(w, engine.start(id).map(|()| Value::Null), 204);
             }
             ("POST", "stop") => {
                 let t = stop_timeout(req, engine, id);
-                return reply(w, engine.stop(id, t).map(|()| Value::Null), 204);
+                // The engine decides: a stop that only cancels a pending
+                // restart still changed something.
+                return match engine.stop(id, t) {
+                    Ok(false) => {
+                        http::respond(w, 304, "", b"")?;
+                        Ok(Next::KeepAlive)
+                    }
+                    r => reply(w, r.map(|_| Value::Null), 204),
+                };
             }
             ("POST", "restart") => {
                 let t = stop_timeout(req, engine, id);
-                let r = engine.stop(id, t).and_then(|()| {
+                let r = engine.stop(id, t).and_then(|_| {
                     // Wait for the exit to be recorded before starting again.
                     engine.wait(id, "not-running")?;
                     super::builder::before_start(engine, id);
@@ -328,6 +364,16 @@ fn kernel_version() -> String {
 
 const GUEST_KERNEL: &str = "6.18-kiri";
 
+/// The release of the kernel containers run on, when the daemon can read it:
+/// the host's on Linux, nothing on macOS (the VM agent does not report one).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(super) fn kernel_release() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    return linux_kernel_release();
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
 #[cfg(target_os = "linux")]
 fn linux_kernel_release() -> Option<String> {
     parse_release(&std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()?)
@@ -339,12 +385,23 @@ fn parse_release(raw: &str) -> Option<String> {
     (!release.is_empty()).then(|| release.to_owned())
 }
 
+/// The Docker Engine release whose API Kiri serves (`http::API_VERSION`,
+/// 1.47: Docker 27.3 to 27.5), reported as the engine's `Version`. Clients
+/// gate on it as a Docker version (Testcontainers wants at least 1.6.0), so
+/// Kiri's own version there read as an ancient engine. Kiri's own version is
+/// `KiriVersion`, and a component named "Kiri". Moves with `API_VERSION`.
+pub const ENGINE_VERSION: &str = "27.5.1";
+
 fn version() -> Value {
-    let v = env!("CARGO_PKG_VERSION");
+    let kiri = env!("CARGO_PKG_VERSION");
     json!({
         "Platform": {"Name": "Kiri"},
-        "Components": [{"Name": "Engine", "Version": v, "Details": {"ApiVersion": http::API_VERSION, "MinAPIVersion": "1.24", "Arch": go_arch(), "Os": "linux"}}],
-        "Version": v,
+        "Components": [
+            {"Name": "Engine", "Version": ENGINE_VERSION, "Details": {"ApiVersion": http::API_VERSION, "MinAPIVersion": "1.24", "Arch": go_arch(), "Os": "linux", "KernelVersion": kernel_version(), "GoVersion": "n/a (Rust)", "GitCommit": ""}},
+            {"Name": "Kiri", "Version": kiri, "Details": {}},
+        ],
+        "Version": ENGINE_VERSION,
+        "KiriVersion": kiri,
         "ApiVersion": http::API_VERSION,
         "MinAPIVersion": "1.24",
         "Os": "linux",
@@ -369,7 +426,8 @@ fn info(engine: &Engine) -> Value {
         "ContainersStopped": states.len() - running,
         "Images": images,
         "Driver": "overlayfs",
-        "ServerVersion": env!("CARGO_PKG_VERSION"),
+        "ServerVersion": ENGINE_VERSION,
+        "KiriVersion": env!("CARGO_PKG_VERSION"),
         "OperatingSystem": "Kiri",
         "OSType": "linux",
         "Architecture": std::env::consts::ARCH,
@@ -381,7 +439,7 @@ fn info(engine: &Engine) -> Value {
         "CgroupVersion": "2",
         "DefaultRuntime": "kiri",
         "Runtimes": {"kiri": {"path": "kiri-init"}},
-        "SecurityOptions": ["name=cgroupns"],
+        "SecurityOptions": ["name=seccomp,profile=builtin", "name=cgroupns"],
         // Not in Docker's /info (the ping's Builder-Version header is), but
         // tools print it: the classic builder API, served by builder.rs.
         "BuilderVersion": "1",
@@ -419,7 +477,9 @@ pub(super) fn reference_matches(pattern: &str, name: &str) -> bool {
 
 fn images(req: &Request, engine: &Engine) -> Result<Value, Error> {
     let f = filters(req, &["reference", "dangling", "label"])?;
-    let list = engine.store.images()?;
+    let mut list = engine.store.images()?;
+    // Newest first, as Docker lists them (#364).
+    list.sort_by_key(|i| std::cmp::Reverse(time::parse_unix(&i.created)));
     // Every stored image is tagged, so there are no dangling ones.
     if f.bool("dangling") == Some(true) {
         return Ok(json!([]));
@@ -508,7 +568,7 @@ fn image_load(req: &Request, engine: &Engine, w: &mut UnixStream, r: &mut BufRea
     let loaded = kiri_image::archive::load(&engine.store, http::Body::new(req, r));
     match loaded {
         Ok(images) => {
-            http::begin_stream(w, 200, "application/json")?;
+            http::begin_stream_with(w, 200, "application/json", http::CLOSE)?;
             for i in &images {
                 engine.emit_image("load", &i.config_digest, &i.name);
                 let line = if i.name.starts_with("sha256:") { format!("Loaded image ID: {}\n", i.name) } else { format!("Loaded image: {}\n", i.name) };
@@ -516,9 +576,9 @@ fn image_load(req: &Request, engine: &Engine, w: &mut UnixStream, r: &mut BufRea
             }
             http::end(w)?;
         }
-        Err(e) => error(w, Error::BadRequest(e.to_string()))?,
+        Err(e) => error_closing(w, Error::BadRequest(e.to_string()))?,
     }
-    // A failed load may leave part of the body unread.
+    // A load may leave part of the body unread (padding after the archive's end).
     Ok(Next::Close)
 }
 
@@ -689,6 +749,18 @@ fn set_env(req: &Request, engine: &Engine, id: &str) -> Result<Value, Error> {
 /// A registry client with the credentials the CLI sent, if any.
 fn client_for(req: &Request) -> Client {
     Client::new().with_credentials(req.header("x-registry-auth").and_then(kiri_image::Credentials::from_header))
+}
+
+/// `GET /distribution/{name}/json`: what the registry serves for an image
+/// reference now (its digest and platforms), without pulling it. Update
+/// checkers (Watchtower, Arcane) and `docker manifest inspect` ask this (#257).
+fn distribution(req: &Request, name: &str) -> Result<Value, Error> {
+    let reference = kiri_image::Reference::parse(name).map_err(|e| Error::BadRequest(format!("invalid reference format: {e}")))?;
+    client_for(req).distribution(&reference).map_err(|e| match e {
+        kiri_image::registry::Error::NotFound(m) => Error::NotFound(m),
+        kiri_image::registry::Error::Status { status: 401 | 403, .. } => Error::Unauthorized(format!("{name}: authentication required")),
+        e => Error::Io(io::Error::other(e.to_string())),
+    })
 }
 
 /// `docker login`: the CLI asks the daemon to check the password, then
@@ -1006,6 +1078,28 @@ fn guest_bind_source(src: &str) -> String {
     mac_source(src).map_or_else(|| src.to_owned(), |real| format!("{MAC_ROOT}{real}"))
 }
 
+/// The guest mount lines with each Mac bind source followed again from the
+/// path the person gave (kept in `info`, one entry per line). Links are
+/// resolved when the container is made; this redoes it at start, so a link
+/// re-pointed since then leads to its new target. Lines that aren't a bind
+/// of the Mac's files stay as they are.
+pub(super) fn fresh_bind_sources(guest: &[String], info: &[Value]) -> Vec<String> {
+    if !cfg!(target_os = "macos") || guest.len() != info.len() {
+        return guest.to_vec();
+    }
+    guest
+        .iter()
+        .zip(info)
+        .map(|(line, i)| {
+            let (Some(src), Some((old, rest))) = (i["Source"].as_str().filter(|_| i["Type"] == "bind"), line.split_once('\t')) else { return line.clone() };
+            if !old.strip_prefix(MAC_ROOT).is_some_and(|p| p.starts_with('/')) || super::binds::engine_socket(src).is_some() {
+                return line.clone();
+            }
+            format!("{}\t{rest}", guest_bind_source(src))
+        })
+        .collect()
+}
+
 /// An NFS or CIFS server name as an address the guest kernel can use.
 /// `host.docker.internal` is the Mac, as it is for containers.
 fn resolve_server(host: &str) -> Option<String> {
@@ -1268,6 +1362,34 @@ fn ports_list(c: &Container) -> Value {
     )
 }
 
+/// What `-p` asked for, as Docker's inspect keeps it in HostConfig: the
+/// container port and protocol, each with the host address and port given
+/// (an empty HostPort for "any free port"). Empty, not null, with none.
+fn inspect_bindings(ports: &[super::ports::Binding]) -> Value {
+    let mut m = serde_json::Map::new();
+    for b in ports {
+        let entry = m.entry(format!("{}/{}", b.container_port, b.proto)).or_insert_with(|| json!([]));
+        if let Some(a) = entry.as_array_mut() {
+            a.push(json!({"HostIp": b.host_ip, "HostPort": if b.host_port == 0 { String::new() } else { b.host_port.to_string() }}));
+        }
+    }
+    Value::Object(m)
+}
+
+/// Config.ExposedPorts: the image's and `--expose`'s ports, and every
+/// published one, as Docker lists them (`"80/tcp": {}`); null with none,
+/// as Docker leaves it out.
+fn inspect_exposed(ports: &[super::ports::Binding], exposed: &[u16]) -> Value {
+    let mut m = serde_json::Map::new();
+    for b in ports {
+        m.insert(format!("{}/{}", b.container_port, b.proto), json!({}));
+    }
+    for p in exposed {
+        m.entry(format!("{p}/tcp")).or_insert_with(|| json!({}));
+    }
+    if m.is_empty() { Value::Null } else { Value::Object(m) }
+}
+
 /// Docker's `NetworkSettings.Ports` map for inspect and `docker port`.
 fn ports_map(c: &Container) -> Value {
     let mut m = serde_json::Map::new();
@@ -1290,6 +1412,18 @@ fn console_size(v: &Value) -> Option<(u16, u16)> {
     (h > 0 && w > 0).then_some((h, w))
 }
 
+/// A create's Entrypoint and Cmd with the image's, by Docker's rules: a
+/// non-empty Entrypoint drops the image's Cmd; otherwise an empty or missing
+/// Cmd takes the image's (Testcontainers sends `"Cmd": []`), and a missing
+/// Entrypoint the image's (`[]` clears it).
+fn command(entry: Option<Vec<String>>, cmd: Option<Vec<String>>, image_entry: &[String], image_cmd: &[String]) -> (Vec<String>, Vec<String>) {
+    let cmd = cmd.unwrap_or_default();
+    match entry {
+        Some(e) if !e.is_empty() => (e, cmd),
+        e => (e.unwrap_or_else(|| image_entry.to_vec()), if cmd.is_empty() { image_cmd.to_vec() } else { cmd }),
+    }
+}
+
 fn strings(v: &Value) -> Option<Vec<String>> {
     match v {
         Value::Array(a) => Some(a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect()),
@@ -1300,7 +1434,7 @@ fn strings(v: &Value) -> Option<Vec<String>> {
 
 /// cgroup limits from a HostConfig (create) or an update body, on top of `base`.
 /// Capability names as Docker writes them (`NET_ADMIN`, `CAP_NET_ADMIN`, `ALL`).
-const CAPS: [&str; 41] = [
+pub(super) const CAPS: [&str; 41] = [
     "CHOWN", "DAC_OVERRIDE", "DAC_READ_SEARCH", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "LINUX_IMMUTABLE",
     "NET_BIND_SERVICE", "NET_BROADCAST", "NET_ADMIN", "NET_RAW", "IPC_LOCK", "IPC_OWNER", "SYS_MODULE", "SYS_RAWIO", "SYS_CHROOT",
     "SYS_PTRACE", "SYS_PACCT", "SYS_ADMIN", "SYS_BOOT", "SYS_NICE", "SYS_RESOURCE", "SYS_TIME", "SYS_TTY_CONFIG", "MKNOD", "LEASE",
@@ -1311,6 +1445,21 @@ const CAPS: [&str; 41] = [
 /// Docker's default set: what a container keeps without `--cap-add`.
 const DEFAULT_CAPS: [&str; 14] =
     ["CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "SETGID", "SETUID", "SETPCAP", "NET_BIND_SERVICE", "NET_RAW", "SYS_CHROOT", "MKNOD", "AUDIT_WRITE", "SETFCAP"];
+
+/// The capabilities a container keeps, one bit each: `caps` as stored (0 is
+/// Docker's default set).
+pub(super) fn effective_caps(caps: u64) -> u64 {
+    if caps != 0 {
+        return caps;
+    }
+    DEFAULT_CAPS.iter().filter_map(|d| CAPS.iter().position(|c| c == d)).fold(0, |m, i| m | 1u64 << i)
+}
+
+/// The capabilities a profile's `includes`/`excludes` see: all of them for a
+/// privileged container, as in moby.
+pub(super) fn profile_caps(caps: u64, privileged: bool) -> u64 {
+    if privileged { (1u64 << CAPS.len()) - 1 } else { effective_caps(caps) }
+}
 
 /// `--cap-add`/`--cap-drop` as a mask; 0 when they change nothing.
 fn caps_from(host: &Value) -> Result<u64, Error> {
@@ -1370,6 +1519,11 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
         return Err(Error::BadRequest("no image specified".into()));
     }
     let host = &body["HostConfig"];
+    // A seccomp profile Kiri cannot apply fails the create, before anything
+    // (volumes) is made for it.
+    if let super::seccomp::Choice::Profile(json) = super::seccomp::choice(&strings(&host["SecurityOpt"]).unwrap_or_default()).map_err(Error::BadRequest)? {
+        super::seccomp::compile(json, profile_caps(caps_from(host)?, host["Privileged"].as_bool().unwrap_or(false))).map_err(Error::BadRequest)?;
+    }
     let network_mode = match host["NetworkMode"].as_str().unwrap_or("default") {
         "" | "default" => "bridge".to_owned(),
         m => m.to_owned(),
@@ -1466,11 +1620,7 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
     if !ports.is_empty() && network_mode == "none" {
         return Err(Error::BadRequest("a container with --network none cannot publish ports".into()));
     }
-    // Docker's rules: an explicit Entrypoint drops the image's Cmd; an
-    // explicit Cmd replaces the image's Cmd but keeps its Entrypoint.
-    let entry_override = strings(&body["Entrypoint"]);
-    let entrypoint = entry_override.clone().unwrap_or_else(|| image.config.entrypoint.clone());
-    let cmd = strings(&body["Cmd"]).unwrap_or_else(|| if entry_override.is_some() { Vec::new() } else { image.config.cmd.clone() });
+    let (entrypoint, cmd) = command(strings(&body["Entrypoint"]), strings(&body["Cmd"]), &image.config.entrypoint, &image.config.cmd);
     let mut env = image.config.env.clone();
     // Settings → Network → "Pass to containers": the proxy, unless set here.
     let given = strings(&body["Env"]).unwrap_or_default();
@@ -1887,8 +2037,10 @@ fn inspect(c: &Container, nets: &[super::network::Network]) -> Value {
             "AttachStdout": true,
             "AttachStderr": true,
             "Labels": if c.spec.labels.is_object() { c.spec.labels.clone() } else { json!({}) },
+            "ExposedPorts": inspect_exposed(&c.spec.ports, &c.spec.exposed),
         },
         "HostConfig": {
+            "PortBindings": inspect_bindings(&c.spec.ports),
             "AutoRemove": c.spec.auto_remove,
             "Privileged": c.spec.privileged,
             "CapAdd": c.spec.cap_add,
@@ -2118,7 +2270,7 @@ fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut UnixStream, r:
             return Ok(Next::KeepAlive);
         }
     };
-    http::upgrade(w)?;
+    http::upgrade_if_asked(req, w)?;
     if want_in {
         forward_stdin(engine.clone(), id, r)?;
     }
@@ -2239,7 +2391,7 @@ fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream,
         http::no_content(w)?;
         return Ok(Next::KeepAlive);
     }
-    http::upgrade(w)?;
+    http::upgrade_if_asked(req, w)?;
     if stdin {
         forward_stdin(engine.clone(), id.to_owned(), r)?;
     }
@@ -2527,14 +2679,14 @@ fn archive_put(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream, r: 
     let mut archive = match upload_reader(head, body) {
         Ok(a) => a,
         Err(e) => {
-            error(w, e)?;
+            error_closing(w, e)?;
             return Ok(Next::Close);
         }
     };
     let stream = match engine.copy(id, kiri_proto::copy_op::IN, path, flags) {
         Ok(s) => s,
         Err(e) => {
-            reply(w, Err(e), 200)?;
+            error_closing(w, e)?;
             return Ok(Next::Close);
         }
     };
@@ -2542,7 +2694,7 @@ fn archive_put(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream, r: 
     if let Err(e) = send_chunks(&mut archive, &mut to_guest) {
         // The body broke off or isn't valid gzip: dropping the stream ends
         // the guest's copy.
-        error(w, upload_error(gzip, e))?;
+        error_closing(w, upload_error(gzip, e))?;
         return Ok(Next::Close);
     }
     let mut from_guest = std::fs::File::from(stream.fd.try_clone()?);
@@ -2555,13 +2707,24 @@ fn archive_put(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream, r: 
         },
         Err(e) => Err(Error::Io(e)),
     };
-    // Docker answers 200 with no body.
+    // Docker answers 200 with no body. The archive was read to its end, so
+    // the connection serves the client's next request (docker-java pools it
+    // and sends `start` next); after a refusal the body may be partly unread.
     match result {
-        Ok(()) => http::respond(w, 200, "text/plain", b"")?,
-        Err(e) => error(w, e)?,
+        // Whatever the guest left unread is read here (normally nothing).
+        Ok(()) if io::copy(&mut archive, &mut io::sink()).is_ok() => {
+            http::respond(w, 200, "text/plain", b"")?;
+            Ok(Next::KeepAlive)
+        }
+        Ok(()) => {
+            error_closing(w, Error::BadRequest("the archive could not be read to its end".into()))?;
+            Ok(Next::Close)
+        }
+        Err(e) => {
+            error_closing(w, e)?;
+            Ok(Next::Close)
+        }
     }
-    // The body may be partly unread after a refusal: this connection is done.
-    Ok(Next::Close)
 }
 
 /// A signal by name or number for a stop signal Docker has already
@@ -2635,6 +2798,43 @@ mod tests {
     #[test]
     fn vm_platforms_report_the_guest_kernel() {
         assert_eq!(version()["KernelVersion"], GUEST_KERNEL);
+    }
+
+    /// Testcontainers gates on the engine version as a Docker version.
+    #[test]
+    fn version_is_a_docker_engine_version_and_kiri_is_beside_it() {
+        let v = version();
+        let major: u32 = v["Version"].as_str().unwrap().split('.').next().unwrap().parse().unwrap();
+        assert!(major >= 25, "{v}");
+        assert_eq!(v["Version"], ENGINE_VERSION);
+        assert_eq!(v["Components"][0]["Name"], "Engine");
+        assert_eq!(v["Components"][0]["Version"], ENGINE_VERSION);
+        assert_eq!(v["KiriVersion"], env!("CARGO_PKG_VERSION"));
+        assert!(v["Components"].as_array().unwrap().iter().any(|c| c["Name"] == "Kiri" && c["Version"] == env!("CARGO_PKG_VERSION")));
+        // The docker CLI reads every component's Details as strings.
+        for c in v["Components"].as_array().unwrap() {
+            assert!(c["Details"].as_object().unwrap().values().all(Value::is_string), "{c}");
+        }
+        assert_eq!(crate::client::kiri_version(&v), Some(env!("CARGO_PKG_VERSION")));
+        // An engine from before KiriVersion: its Version was Kiri's.
+        assert_eq!(crate::client::kiri_version(&json!({"Version": "0.2.0"})), Some("0.2.0"));
+    }
+
+    /// Docker's merge of a create's Entrypoint and Cmd with the image's.
+    #[test]
+    fn create_command_follows_docker() {
+        let s = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let (ie, ic) = (s(&["/entry"]), s(&["/bin/ryuk"]));
+        // Testcontainers (Java, .NET): "Cmd": [] means the image's Cmd.
+        assert_eq!(command(None, Some(vec![]), &ie, &ic), (ie.clone(), ic.clone()));
+        assert_eq!(command(None, None, &ie, &ic), (ie.clone(), ic.clone()));
+        assert_eq!(command(None, Some(s(&["x"])), &ie, &ic), (ie.clone(), s(&["x"])));
+        // A non-empty Entrypoint drops the image's Cmd.
+        assert_eq!(command(Some(s(&["sh"])), None, &ie, &ic), (s(&["sh"]), vec![]));
+        assert_eq!(command(Some(s(&["sh"])), Some(vec![]), &ie, &ic), (s(&["sh"]), vec![]));
+        assert_eq!(command(Some(s(&["sh"])), Some(s(&["-c", "x"])), &ie, &ic), (s(&["sh"]), s(&["-c", "x"])));
+        // "Entrypoint": [] clears the image's and keeps its Cmd.
+        assert_eq!(command(Some(vec![]), None, &ie, &ic), (vec![], ic.clone()));
     }
 
     #[test]
@@ -2780,6 +2980,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A linked bind source is followed again at each start: re-pointing the
+    /// link (a `current` release link) mounts the new target.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bind_links_are_followed_again_at_start() {
+        let dir = std::env::temp_dir().join(format!("kiri-fresh-binds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for r in ["r1", "r2"] {
+            std::fs::create_dir_all(dir.join(r)).unwrap();
+        }
+        let link = dir.join("current");
+        std::os::unix::fs::symlink("r1", &link).unwrap();
+        let src = link.to_str().unwrap().to_owned();
+        let at = |r: &str| format!("/mnt/mac{}\t/app\t", std::fs::canonicalize(dir.join(r)).unwrap().display());
+        let made = format!("{}\t/app\t", guest_bind_source(&src));
+        assert_eq!(made, at("r1"));
+        let guest = vec![made, "tmpfs\t/t\tnoexec".to_owned()];
+        let info = vec![json!({"Type": "bind", "Source": src}), json!({"Type": "tmpfs", "Source": ""})];
+        // Unchanged link: the same lines.
+        assert_eq!(fresh_bind_sources(&guest, &info), guest);
+        // Re-pointed: the new target; other mounts as they were.
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("r2", &link).unwrap();
+        assert_eq!(fresh_bind_sources(&guest, &info), [at("r2"), guest[1].clone()]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn signals_like_docker() {
         for (raw, n) in [
@@ -2878,6 +3105,13 @@ mod network_option_tests {
     #[test]
     fn container_network_mode_refuses_what_docker_refuses() {
         assert!(container_mode_allowed(&json!({"HostConfig": {"NetworkMode": "container:web"}}), "web").is_ok());
+        // inspect reports the bindings asked for, as Docker does.
+        let b = |container_port, proto: &str, host_ip: &str, host_port| super::super::ports::Binding { container_port, proto: proto.into(), host_ip: host_ip.into(), host_port };
+        let ports = [b(80, "tcp", "", 8080), b(80, "tcp", "127.0.0.1", 0), b(53, "udp", "", 5353)];
+        assert_eq!(inspect_bindings(&ports), json!({"80/tcp": [{"HostIp": "", "HostPort": "8080"}, {"HostIp": "127.0.0.1", "HostPort": ""}], "53/udp": [{"HostIp": "", "HostPort": "5353"}]}));
+        assert_eq!(inspect_bindings(&[]), json!({}));
+        assert_eq!(inspect_exposed(&[], &[]), Value::Null);
+        assert_eq!(inspect_exposed(&ports, &[80, 9000]), json!({"80/tcp": {}, "53/udp": {}, "9000/tcp": {}}));
         // Compose sends empty lists and maps for what a service leaves out.
         assert!(container_mode_allowed(&json!({"Hostname": "", "ExposedPorts": {}, "HostConfig": {"PortBindings": {}, "Dns": [], "Links": null}}), "web").is_ok());
         assert!(container_mode_allowed(&json!({}), "").is_err());

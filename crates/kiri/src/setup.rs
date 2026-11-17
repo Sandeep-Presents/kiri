@@ -141,11 +141,16 @@ pub fn run(args: &[String]) -> io::Result<()> {
         write_json(&path, &cfg)?;
         println!("docker now uses Kiri by default (`docker context use default` to switch back)");
     }
+    // Each step's error says which step it was: on first launch it is all
+    // the log has to go on (#250).
+    fn step(what: &'static str) -> impl Fn(io::Error) -> io::Error {
+        move |e| io::Error::new(e.kind(), format!("{what}: {e}"))
+    }
     if let Some(contents) = bundle_contents() {
-        bundled_cli(&contents)?;
+        bundled_cli(&contents).map_err(step("setting up the kiri and docker commands"))?;
     }
     if !flag("--no-agent") {
-        let plist = agent()?;
+        let plist = agent().map_err(step("starting the engine at login"))?;
         println!("kiri daemon starts at login ({})", plist.display());
     }
     match builder() {
@@ -642,17 +647,38 @@ fn zdotdir(home: &Path) -> PathBuf {
     std::env::var_os("ZDOTDIR").filter(|d| !d.is_empty()).map_or_else(|| home.to_path_buf(), PathBuf::from)
 }
 
+/// Puts ~/.kiri/bin on the shell's PATH in each profile. A profile that
+/// can't be written is passed over (and logged), not the end of setup: a
+/// link to a dotfiles folder that moved made the app's first launch quit
+/// with only "No such file or directory" (#250).
 fn shell_path(home: &Path, zdotdir: &Path) -> io::Result<()> {
     for (file, line) in profiles(home, zdotdir) {
-        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        // A link to nothing (or to a place Kiri can't reach): writing
+        // through it fails when the target's folder is gone (#250), or makes
+        // a file where it points. It stays as the user left it.
+        if file.symlink_metadata().is_ok() && !file.try_exists().unwrap_or(false) {
+            crate::diag::warn!("shell profile skipped: a link to nothing", file = file.display());
+            continue;
+        }
+        // Only a profile Kiri could read, or one that isn't there, is
+        // written: a read error (not UTF-8, no read permission) must never
+        // turn into a profile holding only Kiri's lines.
+        let text = match std::fs::read_to_string(&file) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                crate::diag::warn!("shell profile skipped", file = file.display(), error = e);
+                continue;
+            }
+        };
         if text.contains(PROFILE_MARK) {
             continue;
         }
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let sep = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
-        std::fs::write(&file, format!("{text}{sep}\n{PROFILE_MARK}\n{line}\n"))?;
+        let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, format!("{text}{sep}\n{PROFILE_MARK}\n{line}\n")));
+        if let Err(e) = written {
+            crate::diag::warn!("shell profile skipped", file = file.display(), error = e);
+        }
     }
     Ok(())
 }
@@ -757,6 +783,27 @@ fn agent() -> io::Result<PathBuf> {
         return Err(io::Error::other(format!("launchctl could not load {}", path.display())));
     }
     Ok(path)
+}
+
+/// Starts the engine through the LaunchAgent, loading it first if launchd
+/// doesn't have it (Login Items turned off and on, or a plist written but
+/// never loaded). Ok(false) when there is no agent for this copy of Kiri,
+/// and the caller starts the engine itself.
+pub fn start_agent() -> io::Result<bool> {
+    if !agent_plist()?.is_file() || !agent_runs_this()? {
+        return Ok(false);
+    }
+    let job = format!("gui/{}/{AGENT}", uid());
+    let kicked = Command::new("/bin/launchctl").args(["kickstart", &job]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()?.success();
+    if kicked {
+        return Ok(true);
+    }
+    // Not loaded: bootstrap it, and RunAtLoad starts it.
+    let loaded = Command::new("/bin/launchctl").args(["bootstrap", &format!("gui/{}", uid())]).arg(agent_plist()?).stderr(std::process::Stdio::null()).status()?.success();
+    if !loaded {
+        crate::diag::info!("the LaunchAgent would not load; starting the engine directly");
+    }
+    Ok(loaded)
 }
 
 /// Whether the LaunchAgent starts this copy of Kiri. One left by another
@@ -924,6 +971,33 @@ mod tests {
     #[test]
     fn quotes_for_sh() {
         assert_eq!(super::sh_quote("/Users/o'neil/.kiri"), r"'/Users/o'\''neil/.kiri'");
+    }
+
+    // #250: a profile that is a link to nowhere (a dotfiles folder that
+    // moved) is passed over, not the end of the app's first launch.
+    #[test]
+    fn a_dangling_profile_link_does_not_stop_setup() {
+        let h = scratch("dangling");
+        std::os::unix::fs::symlink(h.join("dotfiles-gone/zshrc"), h.join(".zshrc")).unwrap();
+        super::shell_path(&h, &h).unwrap();
+        assert!(std::fs::read_link(h.join(".zshrc")).is_ok(), "the user's link stays a link");
+        assert!(!h.join("dotfiles-gone").exists(), "nothing made where it points");
+        assert!(std::fs::read_to_string(h.join(".zprofile")).unwrap().contains(super::PROFILE_MARK), "the other profiles still get the line");
+        super::remove_shell_path(&h, &h).unwrap();
+        let _ = std::fs::remove_dir_all(&h);
+    }
+
+    // A profile Kiri can't read as text is left exactly as it was, never
+    // replaced by Kiri's lines alone.
+    #[test]
+    fn an_unreadable_profile_is_left_alone() {
+        let h = scratch("unreadable");
+        let latin1: &[u8] = b"# caf\xe9 settings\nexport EDITOR=vim\n";
+        std::fs::write(h.join(".zshrc"), latin1).unwrap();
+        super::shell_path(&h, &h).unwrap();
+        assert_eq!(std::fs::read(h.join(".zshrc")).unwrap(), latin1);
+        assert!(std::fs::read_to_string(h.join(".zprofile")).unwrap().contains(super::PROFILE_MARK));
+        let _ = std::fs::remove_dir_all(&h);
     }
 
     #[test]

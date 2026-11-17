@@ -87,9 +87,32 @@ pub mod update {
         std::env::current_exe()
     }
 
-    /// The engine is the `kiri` system service: restarting it is root's.
-    pub fn restart_engine() {
-        crate::diag::info!("the engine restarts with: sudo systemctl restart kiri");
+    /// The engine is the `kiri` system service, so restarting it is root's:
+    /// `kiri host-access --restart` through pkexec (one password prompt),
+    /// then the engine must answer as `expect`.
+    pub fn restart_engine(expect: &str) -> io::Result<String> {
+        crate::diag::info!("restarting the engine", version = expect);
+        super::onboarding::restart_engine()?;
+        let began = std::time::Instant::now();
+        let mut last = None;
+        while began.elapsed() < std::time::Duration::from_secs(60) {
+            if let Some(v) = crate::client::request("GET", "/version", None).ok().filter(|r| r.ok()).and_then(|r| crate::client::kiri_version(&r.json()).map(str::to_owned)) {
+                if v == expect {
+                    return Ok(v);
+                }
+                last = Some(v);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        Err(io::Error::other(match last {
+            Some(v) => format!("the engine came back on {v}, not {expect}: is the kiri package upgraded?"),
+            None => "the engine did not come back: journalctl -u kiri says why".to_owned(),
+        }))
+    }
+
+    /// Never called: the window doesn't start Linux's engine (systemd does).
+    pub fn start_engine() -> io::Result<()> {
+        Err(super::engine_down())
     }
 }
 
@@ -216,10 +239,20 @@ pub mod onboarding {
     }
 
     fn host_access() -> io::Result<()> {
+        pkexec_host_access(&[])
+    }
+
+    /// Restarts the `kiri` service, through the same password prompt.
+    pub fn restart_engine() -> io::Result<()> {
+        pkexec_host_access(&["--restart"])
+    }
+
+    fn pkexec_host_access(flags: &[&str]) -> io::Result<()> {
+        let user = user();
         if which("pkexec").is_none() {
-            return Err(io::Error::other(format!("this system has no pkexec to ask for your password: in a terminal, run  sudo kiri host-access {}", user())));
+            return Err(io::Error::other(format!("this system has no pkexec to ask for your password: in a terminal, run  sudo kiri host-access {}{user}", flags.iter().map(|f| format!("{f} ")).collect::<String>())));
         }
-        let out = Command::new("pkexec").args([KIRI, "host-access", &user()]).stdin(Stdio::null()).output()?;
+        let out = Command::new("pkexec").arg(KIRI).arg("host-access").args(flags).arg(&user).stdin(Stdio::null()).output()?;
         match out.status.code() {
             Some(0) | Some(10) => Ok(()),
             // pkexec: 126 the dialog was dismissed or the password refused, 127 not allowed.

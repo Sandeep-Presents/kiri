@@ -194,13 +194,123 @@ pub fn install_staged() -> io::Result<String> {
     Ok(version)
 }
 
-/// Restarts the daemon on the app's current binary. Running containers stop;
-/// those with a restart policy start again.
-pub fn restart_engine() {
-    crate::diag::info!("restarting the engine");
-    // SAFETY: getuid cannot fail.
-    let uid = unsafe { libc::getuid() };
-    let _ = Command::new("/bin/launchctl").args(["kickstart", "-k", &format!("gui/{uid}/dev.kiri.daemon")]).stderr(std::process::Stdio::null()).status();
+/// Restarts the engine on the app's current binary and waits until it
+/// answers as `expect` (the version now installed), which it returns.
+/// Running containers stop; those with a restart policy start again.
+///
+/// The running engine is stopped whoever started it: the LaunchAgent, the
+/// window (ensure_daemon, when it got there first) or a terminal. Asking
+/// launchd alone (`kickstart -k`) missed the last two: the job it restarted
+/// found the old engine still on the socket and exited, and the old one kept
+/// running while the window said it had restarted.
+pub fn restart_engine(expect: &str) -> io::Result<String> {
+    crate::diag::info!("restarting the engine", version = expect);
+    stop_engine()?;
+    start_engine()?;
+    let found = wait_for_version(expect, std::time::Duration::from_secs(60));
+    match found {
+        Some(v) if v == expect => {
+            crate::diag::info!("engine restarted", version = v);
+            Ok(v)
+        }
+        Some(v) => Err(io::Error::other(format!("the engine came back on {v}, not {expect}"))),
+        None => Err(io::Error::other(format!("the engine did not come back; see {}", log_path().display()))),
+    }
+}
+
+/// Starts the engine if it is not running: through the LaunchAgent when it
+/// starts this copy of Kiri, so launchd owns the one engine there is, else
+/// as a child of its own session. Returns once it answers.
+pub fn start_engine() -> io::Result<()> {
+    if crate::client::alive() {
+        return Ok(());
+    }
+    crate::diag::info!("starting the engine");
+    if !crate::setup::start_agent().unwrap_or(false) {
+        spawn_daemon()?;
+    }
+    for _ in 0..200 {
+        if crate::client::alive() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Err(io::Error::other(format!("kiri daemon did not start; see {}", log_path().display())))
+}
+
+fn log_path() -> PathBuf {
+    crate::client::socket().ok().and_then(|s| Some(s.parent()?.parent()?.join("daemon.log"))).unwrap_or_else(|| PathBuf::from("daemon.log"))
+}
+
+/// `kiri daemon` in its own session, so quitting the window does not take
+/// it down; its output goes to daemon.log.
+fn spawn_daemon() -> io::Result<()> {
+    let log_file = log_path();
+    if let Some(dir) = log_file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let log = std::fs::OpenOptions::new().create(true).append(true).open(&log_file)?;
+    let mut cmd = Command::new(std::env::current_exe()?);
+    cmd.arg("daemon").stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log);
+    // SAFETY: setsid is async-signal-safe and runs in the child before exec.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(&mut cmd, || {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn()?;
+    Ok(())
+}
+
+/// Stops the engine on the socket, if one answers: SIGTERM (it powers the
+/// VM off and removes the socket), then SIGKILL if it is still there after
+/// 30 seconds.
+fn stop_engine() -> io::Result<()> {
+    let Some(pid) = engine_pid() else { return Ok(()) };
+    crate::diag::info!("stopping the engine", pid = pid);
+    for (sig, wait) in [(libc::SIGTERM, 30_000u64), (libc::SIGKILL, 5_000)] {
+        // SAFETY: kill on a pid we just read from the socket's peer.
+        unsafe { libc::kill(pid, sig) };
+        let began = std::time::Instant::now();
+        while began.elapsed() < std::time::Duration::from_millis(wait) {
+            // SAFETY: signal 0 only asks whether the process is there.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    Err(io::Error::other(format!("the engine (process {pid}) did not stop")))
+}
+
+/// The process answering on the engine's socket (macOS's LOCAL_PEERPID):
+/// the engine itself, however it was started.
+fn engine_pid() -> Option<libc::pid_t> {
+    use std::os::fd::AsRawFd;
+    let conn = std::os::unix::net::UnixStream::connect(crate::client::socket().ok()?).ok()?;
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    // SAFETY: a valid socket, and a pid_t-sized buffer with its length.
+    let r = unsafe { libc::getsockopt(conn.as_raw_fd(), libc::SOL_LOCAL, libc::LOCAL_PEERPID, (&mut pid as *mut libc::pid_t).cast(), &mut len) };
+    (r == 0 && pid > 0).then_some(pid)
+}
+
+/// The engine's version once it answers as `expect`, or the last other
+/// version it gave when `limit` runs out (None if it never answered).
+pub fn wait_for_version(expect: &str, limit: std::time::Duration) -> Option<String> {
+    let began = std::time::Instant::now();
+    let mut last = None;
+    while began.elapsed() < limit {
+        if let Some(v) = crate::client::request("GET", "/version", None).ok().filter(|r| r.ok()).and_then(|r| crate::client::kiri_version(&r.json()).map(str::to_owned)) {
+            if v == expect {
+                return Some(v);
+            }
+            last = Some(v);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    last
 }
 
 /// Whether `new_app` is a genuine Kiri `promised`, newer than this build.
@@ -297,10 +407,10 @@ pub fn run(args: &[String]) -> io::Result<()> {
         return Err(io::Error::other("download the new .deb or .rpm from https://runkiri.com/releases/ and install it as before"));
     }
     download(&release, &mut |_, _| {}, &AtomicBool::new(false))?;
-    install_staged()?;
+    let version = install_staged()?;
     // The daemon runs from the app: restart it on the new binary.
-    restart_engine();
-    println!("updated to Kiri {}", release.version);
+    restart_engine(&version)?;
+    println!("updated to Kiri {version}, and the engine runs it");
     Ok(())
 }
 

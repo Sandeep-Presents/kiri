@@ -63,6 +63,7 @@
   "After the restart": "重新啟動之後",
   "Age": "存在時間",
   "All": "全部",
+  "All languages · {n}": "所有語言 · {n}",
   "All levels": "所有層級",
   "All statuses": "所有狀態",
   "All steps": "所有步驟",
@@ -613,6 +614,8 @@
   "No fix yet": "尚無修正",
   "No images yet": "還沒有映像檔",
   "No known vulnerabilities in {n} packages": "{n} 個套件中沒有已知弱點",
+  "No language matches. Try its English name.": "沒有符合的語言。試試它的英文名稱。",
+  "No languages match": "沒有符合的語言",
   "No lines match.": "沒有相符的行。",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "還沒有鏡像源：Docker Hub 映像將直接來自 Docker Hub 官方來源。",
   "No networks yet": "還沒有網路",
@@ -908,6 +911,7 @@
   "Search Kiri": "搜尋 Kiri",
   "Search Kiri…": "搜尋 Kiri…",
   "Search containers, images…": "搜尋容器、映像檔…",
+  "Search languages": "搜尋語言",
   "Search {view}…": "搜尋{view}…",
   "Searching Docker Hub": "正在搜尋 Docker Hub",
   "Security": "安全性",
@@ -1091,6 +1095,7 @@
   "Storage": "儲存裝置",
   "Strong enough": "強度足夠",
   "Subnet": "子網路",
+  "Suggested": "建議",
   "Switch and import": "切換並匯入",
   "Switch and import {n} item": "切換並匯入 {n} 個項目",
   "Switch and import {n} items": "切換並匯入 {n} 個項目",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— 記錄串流已結束 —",
   "‹ Back": "‹ 返回",
   "★ Star on GitHub": "★ 在 GitHub 上給 Star",
-  "✓ Installed": "✓ 已安裝"
+  "✓ Installed": "✓ 已安裝",
+  "Waiting to come back": "等待重新接上",
+  "Stop waiting": "停止等待",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "裝置回來後 Kiri 會再次接上。停止等待即可把它留在這台電腦上。"
 }

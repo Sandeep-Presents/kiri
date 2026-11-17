@@ -21,6 +21,8 @@ const PLACES = [["containers"], ["images"], ["volumes"], ["networks"], ["builds"
 for (const id of ["appearance", "resources", "network", "builds", "kubernetes", "import", "domains", "diagnostics", "about"])
   PLACES.push([`settings ${id}`, () => { show("settings"); document.querySelector(`[data-stab="${id}"]`).click(); }]);
 const visit = ([name, go]) => (go ? go() : show(name));
+// Back to the setting it started with at the end: Appearance shows the choice (System or English) on its Language button.
+const was = prefs.lang || "system";
 const before = new Map(PLACES.map((p) => { visit(p); return [p[0], words()]; }));
 for (const round of ["zh-Hans", "system", "zh-Hans", "en", "zh-Hans"]) {
   pick(round);
@@ -30,7 +32,7 @@ for (const round of ["zh-Hans", "system", "zh-Hans", "en", "zh-Hans"]) {
     if (round === "zh-Hans") { const left = english(document.body); if (left.length) R.push(`FAIL ${p[0]} in Chinese (switched to, round ${R.length}): English left: ${left.slice(0, 5).map((x) => JSON.stringify(x)).join(", ")}`); }
   }
 }
-pick("en");
+pick(was);
 for (const p of PLACES) t(`${p[0]} reads as before after the round trip`, () => {
   visit(p);
   const now = words(), was = before.get(p[0]);
@@ -56,10 +58,14 @@ t("every language comes from the host when picked, and shows", () => {
     if (nav !== STRINGS[id]["Containers"]) throw new Error(`${id}: the sidebar says ${nav}`);
     if (document.documentElement.classList.contains("cjk") !== /^(zh|ja|ko)/.test(id)) throw new Error(`${id}: cjk is ${document.documentElement.classList.contains("cjk")}`);
     // Arabic alone turns the window right to left, with its own fonts first.
-    if (document.documentElement.dir !== (id === "ar" ? "rtl" : "ltr")) throw new Error(`${id}: dir is ${document.documentElement.dir}`);
-    if (getComputedStyle(document.documentElement).getPropertyValue("--ui-font").includes("Geeza Pro") !== (id === "ar")) throw new Error(`${id}: Arabic's fonts`);
+    const rtlLang = ["ar", "fa", "ckb"].includes(id);
+    if (document.documentElement.dir !== (rtlLang ? "rtl" : "ltr")) throw new Error(`${id}: dir is ${document.documentElement.dir}`);
+    if (getComputedStyle(document.documentElement).getPropertyValue("--ui-font").includes("Geeza Pro") !== rtlLang) throw new Error(`${id}: Arabic script's fonts`);
     const font = getComputedStyle(document.documentElement).getPropertyValue("--ui-font");
-    const want = { ja: "Hiragino Sans", ko: "Malgun Gothic", "zh-Hant": "PingFang TC", "zh-Hans": "PingFang SC" }[id] || "PingFang SC";
+    const want = { ja: "Hiragino Sans", ko: "Malgun Gothic", "zh-Hant": "PingFang TC", "zh-Hans": "PingFang SC", hi: "Kohinoor Devanagari", bn: "Kohinoor Bangla", ta: "Tamil Sangam MN", am: "Kefa", te: "Kohinoor Telugu", th: "Thonburi", lo: "Lao Sangam MN" }[id] || "PingFang SC";
+    // Hindi, Bengali and Tamil each with their own script's fonts, and only them.
+    if (/^(hi|bn|ta|te)$/.test(id) && !font.includes("Nirmala UI")) throw new Error(`${id}: no Nirmala UI in ${font}`);
+    if (!/^(hi|bn|ta|te)$/.test(id) && font.includes("Nirmala UI")) throw new Error(`${id}: Indian fonts in ${font}`);
     if (!font.includes(want)) throw new Error(`${id}: the font is ${font}`);
   }
   pick("en");
@@ -75,7 +81,7 @@ t("an answer for a language no longer picked changes nothing", () => {
 });
 t("tags map to the languages Kiri has, as lang.rs maps them", () => {
   const want = { zh: "zh-Hans", "zh-CN": "zh-Hans", "zh-SG": "zh-Hans", "zh-Hans-HK": "zh-Hans", zh_TW: "zh-Hant", "zh-TW": "zh-Hant", "zh-HK": "zh-Hant", "zh-MO": "zh-Hant", "zh-Hant": "zh-Hant", "zh-Hant-CN": "zh-Hant",
-    zhx: "", in: "id", "in-ID": "id", "id-ID": "id", iw: "", "iw-IL": "", "ja-JP": "ja", "ko-KR": "ko", "ru-RU": "ru", "pl-PL": "pl", "tr-TR": "tr", "vi-VN": "vi", "it-CH": "it", "pt-PT": "pt-BR", "fr-CA": "fr", "en-GB": "en", nl: "", ar: "ar", "ar-SA": "ar", "ar-EG": "ar", ar_AE: "ar", arz: "", he: "" };
+    zhx: "", in: "id", "in-ID": "id", "id-ID": "id", iw: "", "iw-IL": "", "ja-JP": "ja", "ko-KR": "ko", "ru-RU": "ru", uk: "uk", "uk-UA": "uk", uk_UA: "uk", hi: "hi", "hi-IN": "hi", "bn-IN": "bn", "bn-BD": "bn", "ta-IN": "ta", "ta-LK": "ta", "te-IN": "te", am: "am", "am-ET": "am", "th-TH": "th", "lo-LA": "lo", "ca-ES": "ca", "cs-CZ": "cs", "lt-LT": "lt", "hu-HU": "hu", "nb-NO": "nb", no: "nb", "nn-NO": "nb", "ro-RO": "ro", "sq-AL": "sq", "sl-SI": "sl", "fi-FI": "fi", "el-GR": "el", "bg-BG": "bg", "kk-KZ": "kk", "fa-IR": "fa", ckb: "ckb", "ku-Arab-IQ": "ckb", ku: "", "pl-PL": "pl", "tr-TR": "tr", "vi-VN": "vi", "it-CH": "it", "pt-PT": "pt-BR", "fr-CA": "fr", "en-GB": "en", nl: "", ar: "ar", "ar-SA": "ar", "ar-EG": "ar", ar_AE: "ar", arz: "", he: "" };
   const bad = Object.entries(want).filter(([tag, id]) => langFor(tag) !== id).map(([tag, id]) => `${tag} → ${langFor(tag)}, not ${id}`);
   if (bad.length) throw new Error(bad.join("; "));
 });

@@ -19,7 +19,8 @@ const MAX_HEAD: u64 = 64 << 10;
 #[derive(Debug)]
 pub struct Request {
     pub method: String,
-    /// Path without the `/v1.xx` prefix or the query string.
+    /// Path without the `/v1.xx` prefix or the query string, percent-decoded
+    /// (`%2F` in an image name is the `/` the router must resolve).
     pub path: String,
     query: Vec<(String, String)>,
     headers: Vec<(String, String)>,
@@ -43,6 +44,14 @@ impl Request {
 
     pub fn header(&self, key: &str) -> Option<&str> {
         self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.as_str())
+    }
+
+    /// The client asked to close the connection after this response
+    /// (`Connection: close`), as Docker.DotNet does on every request. Docker
+    /// closes then; a client that reads a 204 to the end of the stream waits
+    /// for that close and times out if it never comes.
+    pub fn wants_close(&self) -> bool {
+        self.header("Connection").is_some_and(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close")))
     }
 
     /// A request the daemon makes of itself (the managed builder's
@@ -71,7 +80,10 @@ pub fn read_request(r: &mut BufReader<UnixStream>, stream: impl Fn(&str, &str) -
         };
         let method = method.to_owned();
         let (raw_path, raw_query) = target.split_once('?').unwrap_or((target, ""));
-        let path = strip_version(raw_path).to_owned();
+        // Decoded once, here, so every route that reads a name from the
+        // path — an image's `%2F` repository slash above all — resolves the
+        // name, not its encoding, as Docker's router does.
+        let path = percent_decode_path(strip_version(raw_path));
         let query: Vec<(String, String)> = raw_query
             .split('&')
             .filter(|kv| !kv.is_empty())
@@ -200,14 +212,27 @@ fn strip_version(path: &str) -> &str {
     path
 }
 
+/// Percent-decodes a query value, where `+` means a space.
 fn percent_decode(s: &str) -> String {
+    unescape(s, true)
+}
+
+/// Percent-decodes the request path. A client may send a name's slash or
+/// colon encoded (`/images/mongodb%2Fmongodb-atlas-local:8.0/json`), and the
+/// router has to see the name, not its encoding. A `+` is a plus here, not
+/// a space; an invalid escape stays written, as in a query value.
+fn percent_decode_path(s: &str) -> String {
+    unescape(s, false)
+}
+
+fn unescape(s: &str, plus_space: bool) -> String {
     let b = s.as_bytes();
     let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
         match b[i] {
-            b'+' => out.push(b' '),
+            b'+' if plus_space => out.push(b' '),
             b'%' if i + 2 < b.len() && hex(b[i + 1]).is_some() && hex(b[i + 2]).is_some() => {
                 out.push(hex(b[i + 1]).unwrap_or(0) << 4 | hex(b[i + 2]).unwrap_or(0));
                 i += 2;
@@ -302,6 +327,18 @@ pub fn error(w: &mut impl Write, status: u16, message: &str) -> io::Result<()> {
     json(w, status, &serde_json::json!({ "message": message }).to_string())
 }
 
+/// The header of a response after which the server closes the connection
+/// (a request body may be left unread). Without it an HTTP/1.1 client keeps
+/// the connection for its next request and writes into a closed socket:
+/// docker-java's pool (Testcontainers) failed the `start` after a copy into
+/// the container with "Broken pipe".
+pub const CLOSE: &str = "Connection: close\r\n";
+
+/// `error` on a connection that closes after it (`CLOSE`).
+pub fn error_closing(w: &mut impl Write, status: u16, message: &str) -> io::Result<()> {
+    respond_with(w, status, "application/json", CLOSE, serde_json::json!({ "message": message }).to_string().as_bytes())
+}
+
 /// Starts a streamed response; follow with [`chunk`] calls and [`end`].
 pub fn begin_stream(w: &mut impl Write, status: u16, content_type: &str) -> io::Result<()> {
     begin_stream_with(w, status, content_type, "")
@@ -341,6 +378,21 @@ pub fn upgrade(w: &mut impl Write) -> io::Result<()> {
     w.flush()
 }
 
+/// Starts the raw stream for Docker's `attach` and `exec` start. As Docker
+/// does (it checks that the `Upgrade` header is present, not its value), a
+/// client that asked for the upgrade (the docker CLI) gets `101`; one that did
+/// not (docker-java, so Testcontainers) gets `200 OK` with the stream as the
+/// body. A `101` to a client that never asked for it can end its read before
+/// the process's exit code is recorded, and it then sees an exec with no
+/// `ExitCode`.
+pub fn upgrade_if_asked(req: &Request, w: &mut impl Write) -> io::Result<()> {
+    if req.header("Upgrade").is_some() {
+        return upgrade(w);
+    }
+    head(w, 200, "Content-Type: application/vnd.docker.raw-stream\r\n")?;
+    w.flush()
+}
+
 /// Docker's multiplexed stream framing: `[stream, 0, 0, 0, len u32 BE] data`.
 pub fn mux_frame(w: &mut impl Write, stream: u8, data: &[u8]) -> io::Result<()> {
     let mut header = [0u8; 8];
@@ -355,6 +407,27 @@ pub fn mux_frame(w: &mut impl Write, stream: u8, data: &[u8]) -> io::Result<()> 
 mod tests {
     use super::*;
 
+    fn with_connection(value: Option<&str>) -> Request {
+        let headers = value.map(|v| vec![("connection".to_owned(), v.to_owned())]).unwrap_or_default();
+        Request { method: "POST".to_owned(), path: "/containers/x/start".to_owned(), query: Vec::new(), headers, body: Vec::new() }
+    }
+
+    /// Docker.DotNet sends `Connection: close` on every request and reads a
+    /// 204 to the end of the stream: the connection must close after it.
+    #[test]
+    fn connection_close_is_asked_for_in_any_case_and_list() {
+        assert!(with_connection(Some("close")).wants_close());
+        assert!(with_connection(Some("Close")).wants_close());
+        assert!(with_connection(Some("keep-alive, close")).wants_close());
+    }
+
+    #[test]
+    fn keep_alive_or_no_header_keeps_the_connection() {
+        assert!(!with_connection(Some("keep-alive")).wants_close());
+        assert!(!with_connection(Some("Upgrade")).wants_close());
+        assert!(!with_connection(None).wants_close());
+    }
+
     #[test]
     fn strips_api_version() {
         assert_eq!(strip_version("/v1.47/containers/json"), "/containers/json");
@@ -368,5 +441,63 @@ mod tests {
         assert_eq!(percent_decode("a+b"), "a b");
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%7B%22a%22%3A1%7D"), "{\"a\":1}");
+    }
+
+    /// The path a request is routed by, read from a real request line so
+    /// the decoding `read_request` does is what's checked.
+    #[test]
+    fn decodes_request_paths() {
+        use std::io::Write;
+        let path_of = |target: &str| {
+            let (mut a, b) = UnixStream::pair().unwrap();
+            a.write_all(format!("GET {target} HTTP/1.1\r\nHost: d\r\n\r\n").as_bytes())
+                .unwrap();
+            drop(a);
+            let mut r = BufReader::new(b);
+            read_request(&mut r, |_, _| false).unwrap().unwrap().path
+        };
+        // A repository slash a client percent-encoded names the same image
+        // as its plain form, with or without the /v1.xx prefix.
+        assert_eq!(
+            path_of("/v1.44/images/mongodb%2Fmongodb-atlas-local:8.0/json"),
+            "/images/mongodb/mongodb-atlas-local:8.0/json"
+        );
+        assert_eq!(
+            path_of("/images/mongodb/mongodb-atlas-local:8.0/json"),
+            "/images/mongodb/mongodb-atlas-local:8.0/json"
+        );
+        // The same hole, everywhere else a name is read from the path.
+        assert_eq!(
+            path_of("/v1.44/containers/db%3A5/json"),
+            "/containers/db:5/json"
+        );
+        assert_eq!(path_of("/volumes/data%2Fset"), "/volumes/data/set");
+        assert_eq!(path_of("/networks/seg%3Anet"), "/networks/seg:net");
+        // A `+` is a plus in a path, not the space it is in a query value.
+        assert_eq!(path_of("/images/a+b/json"), "/images/a+b/json");
+        // An invalid escape stays written, as in query values.
+        assert_eq!(path_of("/images/100%/json"), "/images/100%/json");
+    }
+
+    /// `attach` and `exec` start answer `101` only to a client that asked to
+    /// upgrade (the docker CLI). docker-java, so Testcontainers, does not, and
+    /// gets `200 OK` with the raw stream as the body, as from Docker.
+    #[test]
+    fn upgrades_only_when_asked() {
+        let reply = |headers: Vec<(String, String)>| {
+            let req = Request { method: "POST".into(), path: "/exec/x/start".into(), query: Vec::new(), headers, body: Vec::new() };
+            let mut out = Vec::new();
+            upgrade_if_asked(&req, &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let asked = reply(vec![("Upgrade".into(), "tcp".into()), ("Connection".into(), "Upgrade".into())]);
+        assert!(asked.starts_with("HTTP/1.1 101 "), "{asked}");
+        assert!(asked.contains("Upgrade: tcp\r\n"), "{asked}");
+        let other = reply(vec![("upgrade".into(), "h2c".into())]);
+        assert!(other.starts_with("HTTP/1.1 101 "), "{other}");
+        let plain = reply(Vec::new());
+        assert!(plain.starts_with("HTTP/1.1 200 OK\r\n"), "{plain}");
+        assert!(plain.contains("Content-Type: application/vnd.docker.raw-stream\r\n"), "{plain}");
+        assert!(!plain.contains("Upgrade"), "{plain}");
     }
 }

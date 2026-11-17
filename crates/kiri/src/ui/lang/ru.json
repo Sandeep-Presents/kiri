@@ -63,6 +63,7 @@
   "After the restart": "После перезапуска",
   "Age": "Возраст",
   "All": "Все",
+  "All languages · {n}": "Все языки · {n}",
   "All levels": "Все уровни",
   "All statuses": "Все статусы",
   "All steps": "Все шаги",
@@ -613,6 +614,8 @@
   "No fix yet": "Исправления пока нет",
   "No images yet": "Образов пока нет",
   "No known vulnerabilities in {n} packages": "Нет известных уязвимостей в пакетах ({n})",
+  "No language matches. Try its English name.": "Подходящих языков нет. Попробуйте английское название.",
+  "No languages match": "Подходящих языков нет",
   "No lines match.": "Нет подходящих строк.",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "Зеркал пока нет: образы Docker Hub берутся напрямую из Docker Hub.",
   "No networks yet": "Сетей пока нет",
@@ -908,6 +911,7 @@
   "Search Kiri": "Поиск в Kiri",
   "Search Kiri…": "Поиск в Kiri…",
   "Search containers, images…": "Поиск контейнеров, образов…",
+  "Search languages": "Поиск языков",
   "Search {view}…": "Поиск: {view}…",
   "Searching Docker Hub": "Поиск в Docker Hub",
   "Security": "Безопасность",
@@ -1091,6 +1095,7 @@
   "Storage": "Накопитель",
   "Strong enough": "Достаточно надёжный",
   "Subnet": "Подсеть",
+  "Suggested": "Рекомендуемые",
   "Switch and import": "Переключить и импортировать",
   "Switch and import {n} item": "Переключить и импортировать {n} объект",
   "Switch and import {n} items": "Переключить и импортировать ({n} шт.)",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— поток журнала завершён —",
   "‹ Back": "‹ Назад",
   "★ Star on GitHub": "★ Звезда на GitHub",
-  "✓ Installed": "✓ Установлено"
+  "✓ Installed": "✓ Установлено",
+  "Waiting to come back": "Ждёт возвращения",
+  "Stop waiting": "Не ждать",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri снова подключит его, когда оно вернётся. Перестаньте ждать, чтобы оставить его на этом компьютере."
 }

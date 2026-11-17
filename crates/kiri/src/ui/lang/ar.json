@@ -63,6 +63,7 @@
   "After the restart": "بعد إعادة التشغيل",
   "Age": "العمر",
   "All": "الكل",
+  "All languages · {n}": "كل اللغات · {n}",
   "All levels": "كل المستويات",
   "All statuses": "كل الحالات",
   "All steps": "كل الخطوات",
@@ -613,6 +614,8 @@
   "No fix yet": "لا إصلاح بعد",
   "No images yet": "لا توجد صور بعد",
   "No known vulnerabilities in {n} packages": "لا ثغرات معروفة في {n} من الحزم",
+  "No language matches. Try its English name.": "لا توجد لغة مطابقة. جرّب اسمها بالإنجليزية.",
+  "No languages match": "لا توجد لغات مطابقة",
   "No lines match.": "لا توجد أسطر مطابقة.",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "لا توجد مرايا بعد: تأتي صور Docker Hub من Docker Hub نفسه.",
   "No networks yet": "لا توجد شبكات بعد",
@@ -908,6 +911,7 @@
   "Search Kiri": "بحث في Kiri",
   "Search Kiri…": "بحث في Kiri…",
   "Search containers, images…": "بحث في الحاويات والصور…",
+  "Search languages": "ابحث عن لغة",
   "Search {view}…": "بحث في {view}…",
   "Searching Docker Hub": "جارٍ البحث في Docker Hub",
   "Security": "الأمان",
@@ -1091,6 +1095,7 @@
   "Storage": "التخزين",
   "Strong enough": "قوية بما يكفي",
   "Subnet": "الشبكة الفرعية",
+  "Suggested": "مقترحة",
   "Switch and import": "تبديل واستيراد",
   "Switch and import {n} item": "تبديل واستيراد {n} عنصر",
   "Switch and import {n} items": "تبديل واستيراد {n} من العناصر",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— انتهى تدفق السجلات —",
   "‹ Back": "‹ رجوع",
   "★ Star on GitHub": "★ نجمة على GitHub",
-  "✓ Installed": "✓ مثبّت"
+  "✓ Installed": "✓ مثبّت",
+  "Waiting to come back": "بانتظار عودته",
+  "Stop waiting": "إيقاف الانتظار",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "يوصله Kiri مجددًا عند عودته. أوقف الانتظار لتتركه على هذا الكمبيوتر."
 }

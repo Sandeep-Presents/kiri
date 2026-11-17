@@ -100,6 +100,18 @@ mod flavor;
 mod share;
 #[cfg(windows)]
 mod update;
+// The engine's files put into WSL, and what a docker client is told when
+// the engine there cannot be reached: plain code, tested on any host.
+#[cfg(any(windows, test))]
+mod wslsync;
+#[cfg(any(windows, test))]
+mod refuse;
+// Settings → Import from Docker Desktop: the Mac's and Linux's own
+// crates/kiri/src/import.rs, through the docker CLI's contexts.
+#[cfg(windows)]
+#[path = "../../kiri/src/import.rs"]
+#[allow(dead_code)]
+mod import;
 
 #[cfg(windows)]
 fn main() -> std::process::ExitCode {

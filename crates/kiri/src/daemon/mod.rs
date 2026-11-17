@@ -27,12 +27,16 @@ mod ops;
 pub(crate) mod ports;
 mod pulls;
 mod registry_mirrors;
+mod seccomp;
+mod seccomp_names;
 pub mod time;
 #[cfg(target_os = "macos")]
 mod usb;
 mod vmcpu;
 mod vmlink;
 mod volumes;
+#[cfg(target_os = "macos")]
+mod watch;
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -132,6 +136,7 @@ pub fn run(_args: &[String]) -> io::Result<()> {
         None => None,
     };
 
+    kiri_image::store::set_error_log(|message| diag::error!("image store", detail = message));
     let store = kiri_image::Store::open(kiri_image::Store::default_root()?)?;
     let engine = engine::Engine::boot(store).inspect_err(|e| diag::error!("engine did not start", error = e))?;
     diag::info!("engine ready", version = env!("CARGO_PKG_VERSION"), ms = t0.elapsed().as_millis(), socket = format!("unix://{}", socket.display()));

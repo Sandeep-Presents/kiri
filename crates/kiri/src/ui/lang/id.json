@@ -63,6 +63,7 @@
   "After the restart": "Setelah restart",
   "Age": "Usia",
   "All": "Semua",
+  "All languages · {n}": "Semua bahasa · {n}",
   "All levels": "Semua level",
   "All statuses": "Semua status",
   "All steps": "Semua langkah",
@@ -613,6 +614,8 @@
   "No fix yet": "Belum ada perbaikan",
   "No images yet": "Belum ada image",
   "No known vulnerabilities in {n} packages": "Tidak ada kerentanan yang diketahui di {n} paket",
+  "No language matches. Try its English name.": "Tidak ada bahasa yang cocok. Coba nama bahasa Inggrisnya.",
+  "No languages match": "Tidak ada bahasa yang cocok",
   "No lines match.": "Tidak ada baris yang cocok.",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "Belum ada mirror: image Docker Hub langsung dari Docker Hub.",
   "No networks yet": "Belum ada jaringan",
@@ -908,6 +911,7 @@
   "Search Kiri": "Cari di Kiri",
   "Search Kiri…": "Cari di Kiri…",
   "Search containers, images…": "Cari kontainer, image…",
+  "Search languages": "Cari bahasa",
   "Search {view}…": "Cari {view}…",
   "Searching Docker Hub": "Mencari di Docker Hub",
   "Security": "Keamanan",
@@ -1091,6 +1095,7 @@
   "Storage": "Penyimpanan",
   "Strong enough": "Cukup kuat",
   "Subnet": "Subnet",
+  "Suggested": "Disarankan",
   "Switch and import": "Beralih dan impor",
   "Switch and import {n} item": "Beralih dan impor {n} item",
   "Switch and import {n} items": "Beralih dan impor {n} item",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— aliran log berakhir —",
   "‹ Back": "‹ Kembali",
   "★ Star on GitHub": "★ Bintangi di GitHub",
-  "✓ Installed": "✓ Terinstal"
+  "✓ Installed": "✓ Terinstal",
+  "Waiting to come back": "Menunggu kembali",
+  "Stop waiting": "Berhenti menunggu",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri memasangnya lagi saat kembali. Berhenti menunggu agar tetap di komputer ini."
 }

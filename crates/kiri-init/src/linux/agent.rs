@@ -12,7 +12,7 @@ use kiri_proto::{Exited, MAX_OUTPUT_CHUNK, Msg, Stats, Stream};
 
 use super::container::{self, NetCtx, Paths, Process};
 use super::net::{self, Bridges, Dhcp};
-use super::{layers, meminfo, sys};
+use super::{fsnotify, layers, meminfo, sys};
 
 /// Input held for a process that is not reading yet. The host sends at most
 /// `INPUT_WINDOW` bytes beyond what `InputConsumed` acknowledged, so a
@@ -99,6 +99,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
     let mut out = Vec::with_capacity(4096);
     let mut chunk = vec![0u8; MAX_OUTPUT_CHUNK];
     let mut fs_buf = Vec::new();
+    let mut fs_events = fsnotify::Pending::default();
 
     loop {
         fds.clear();
@@ -120,6 +121,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
         fds.push(libc::pollfd { fd: pressure.as_ref().map_or(-1, |f| f.as_raw_fd()), events: libc::POLLPRI, revents: 0 });
         fds.push(libc::pollfd { fd: term.as_ref().map_or(-1, |f| f.as_raw_fd()), events: libc::POLLIN, revents: 0 });
         fds.push(libc::pollfd { fd: usage_wake.as_raw_fd(), events: libc::POLLIN, revents: 0 });
+        super::copy::interest(&mut fds);
         for r in &relays {
             r.interest(&mut fds);
         }
@@ -146,6 +148,14 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
         let wait = dns.timeout_ms();
         if wait >= 0 {
             timeout = if timeout < 0 { wait } else { timeout.min(wait) };
+        }
+        // Changes from the Mac still to raise: a few now, the rest after
+        // whatever else is ready.
+        if !fs_events.is_empty() {
+            fs_events.raise_some();
+            if !fs_events.is_empty() {
+                timeout = 0;
+            }
         }
         // SAFETY: `fds` is a valid array of pollfd of the given length.
         let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
@@ -253,6 +263,9 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                 }
                 continue;
             }
+            if super::copy::on_readable(pfd.fd, paths) {
+                continue;
+            }
             if let Some(r) = relays.iter_mut().find(|r| r.owns(pfd.fd)) {
                 r.step();
                 continue;
@@ -307,20 +320,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
             .collect();
         for pid in done {
             let p = procs.remove(&pid).expect("listed above");
-            let (code, reaped_ns) = p.exited.expect("filtered on exited");
-            out.clear();
-            let oom_killed = container::oom_killed(&p.run);
-            Msg::Exited(Exited { id: &p.run.id, code, setup_ns: p.cloned_ns - p.received_ns, run_ns: reaped_ns - p.cloned_ns, oom_killed })
-                .encode(&mut out);
-            conn.write_all(&out)?;
-            for (bridge, ip) in &p.run.dns_entries {
-                dns.unregister(bridge, *ip);
-            }
-            dns.drop_container(pid);
-            // A container still running in its network namespace keeps that
-            // alive (its execs went with its PID namespace and count as 0).
-            let shared = p.run.netns != 0 && procs.values().any(|o| o.exited.is_none() && o.run.netns == p.run.netns);
-            container::teardown(&p.run, shared);
+            finish(&mut conn, &mut dns, &procs, p, true)?;
         }
 
         if fds[0].revents != 0 {
@@ -342,8 +342,8 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                         // what is left is killed and torn down.
                         stop_containers(&mut procs);
                     } else {
-                        for p in procs.values() {
-                            // SAFETY: signalling a child we started.
+                        for p in procs.values().filter(|p| p.exited.is_none()) {
+                            // SAFETY: signalling a child we started and have not reaped.
                             unsafe { libc::kill(p.run.pid, libc::SIGKILL) };
                         }
                     }
@@ -379,19 +379,21 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                     Ok(run) => {
                         let cloned_ns = sys::boottime_ns();
                         Msg::Started { id: &run.id, pid: run.pid as u32 }.encode(&mut out);
-                        procs.insert(run.pid, new_proc(run, received_ns, cloned_ns));
+                        admit(&mut conn, &mut dns, &mut procs, new_proc(run, received_ns, cloned_ns))?;
                     }
                     Err(e) => Msg::Error(&format!("run {}: {e}", spec.id)).encode(&mut out),
                 },
                 Ok(Msg::Exec(spec)) => {
-                    let target = procs.values().find(|p| p.run.container.is_none() && p.run.id == spec.container_id);
-                    match target.map(|p| p.run.pid) {
+                    // Its namespaces are entered through /proc/<pid>: only a
+                    // container still running, never one exited under a freed pid.
+                    // The container's own seccomp profile goes with it, if it has one.
+                    match running_pid(&procs, spec.container_id).and_then(|pid| procs.get(&pid).map(|p| (pid, p.run.seccomp.clone()))) {
                         None => Msg::Error(&format!("container {} is not running", spec.container_id)).encode(&mut out),
-                        Some(pid) => match container::exec(&spec, pid, paths) {
+                        Some((pid, profile)) => match container::exec(&spec, pid, paths, &profile) {
                             Ok(run) => {
                                 let cloned_ns = sys::boottime_ns();
                                 Msg::Started { id: &run.id, pid: run.pid as u32 }.encode(&mut out);
-                                procs.insert(run.pid, new_proc(run, received_ns, cloned_ns));
+                                admit(&mut conn, &mut dns, &mut procs, new_proc(run, received_ns, cloned_ns))?;
                             }
                             Err(e) => Msg::Error(&format!("exec in {}: {e}", spec.container_id)).encode(&mut out),
                         },
@@ -429,14 +431,15 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                     continue;
                 }
                 Ok(Msg::Resize { id, rows, cols }) => {
-                    if let Some(fd) = procs.values().find(|p| p.run.id == id && p.run.tty).and_then(|p| p.run.stdout.as_ref()) {
+                    if let Some(fd) = running(&procs, id).filter(|p| p.run.tty).and_then(|p| p.run.stdout.as_ref()) {
                         sys::resize_pty(fd.as_raw_fd(), rows, cols);
                     }
                     continue;
                 }
                 Ok(Msg::Kill { id, signal }) => {
-                    if let Some(p) = procs.values().find(|p| p.run.id == id) {
-                        // SAFETY: signalling a child we started and have not reaped.
+                    if let Some(p) = running(&procs, id) {
+                        // SAFETY: signalling a child we started and have not
+                        // reaped, so its pid can't belong to another process.
                         unsafe { libc::kill(p.run.pid, signal as libc::c_int) };
                     }
                     continue; // no reply: the exit, if any, is reported as Exited
@@ -501,6 +504,10 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                         dns.forget_bridge(bridge);
                         bridges.remove(bridge);
                     }
+                    continue;
+                }
+                Ok(Msg::FsEvents(lines)) => {
+                    fs_events.add(lines.iter());
                     continue;
                 }
                 Ok(Msg::Retain(keep)) => {
@@ -804,6 +811,7 @@ fn child_signals() -> io::Result<OwnedFd> {
 /// seconds at most), and each container torn down: mounts, cgroup, and the
 /// writable layer of a `--rm` one. Veths go with their network namespaces.
 fn stop_containers(procs: &mut HashMap<libc::pid_t, Proc>) {
+    super::copy::stop_all();
     for p in procs.values().filter(|p| p.exited.is_none()) {
         // SAFETY: signalling a child we started and have not reaped.
         unsafe { libc::kill(p.run.pid, libc::SIGKILL) };
@@ -865,6 +873,67 @@ fn drain_signals(fd: &OwnedFd) {
     while unsafe { libc::read(fd.as_raw_fd(), info.as_mut_ptr().cast(), info.len()) } > 0 {}
 }
 
+/// Reports an exited process to the host, then tears it down. `listener`:
+/// whether its 127.0.0.11 server goes too (not when `admit` evicts it: the
+/// server under that pid may be the new process's by then).
+fn finish(conn: &mut File, dns: &mut super::dns::Dns, procs: &HashMap<libc::pid_t, Proc>, p: Proc, listener: bool) -> io::Result<()> {
+    let (code, reaped_ns) = p.exited.unwrap_or((128 + libc::SIGKILL, sys::boottime_ns()));
+    let mut out = Vec::new();
+    let oom_killed = container::oom_killed(&p.run);
+    Msg::Exited(Exited { id: &p.run.id, code, setup_ns: p.cloned_ns - p.received_ns, run_ns: reaped_ns - p.cloned_ns, oom_killed })
+        .encode(&mut out);
+    conn.write_all(&out)?;
+    for (bridge, ip) in &p.run.dns_entries {
+        dns.unregister(bridge, *ip);
+    }
+    if listener {
+        dns.drop_container(p.run.pid);
+    }
+    // A container still running in its network namespace keeps that
+    // alive (its execs went with its PID namespace and count as 0).
+    let shared = p.run.netns != 0 && procs.values().any(|o| o.exited.is_none() && o.run.netns == p.run.netns);
+    container::teardown(&p.run, shared);
+    Ok(())
+}
+
+/// Adds a started process. An exited one whose output is still being read
+/// can hold the same pid, which `reap` freed and a new clone just took:
+/// replaced silently, its exit was never reported (a `docker wait` or exec
+/// hung) and its mounts, cgroup and DNS names stayed (#324). It is
+/// finished first, with the output it still has buffered.
+fn admit(conn: &mut File, dns: &mut super::dns::Dns, procs: &mut HashMap<libc::pid_t, Proc>, new: Proc) -> io::Result<()> {
+    let pid = new.run.pid;
+    if let Some(mut old) = procs.remove(&pid) {
+        let mut chunk = vec![0u8; MAX_OUTPUT_CHUNK];
+        let mut out = Vec::new();
+        for (stream, fd) in [(Stream::Stdout, old.run.stdout.take()), (Stream::Stderr, old.run.stderr.take())] {
+            let Some(fd) = fd else { continue };
+            loop {
+                // SAFETY: reading into a buffer we own from a non-blocking
+                // descriptor we own.
+                let got = unsafe { libc::read(fd.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len()) };
+                if got <= 0 {
+                    break;
+                }
+                out.clear();
+                Msg::Output { id: &old.run.id, stream, data: &chunk[..got as usize] }.encode(&mut out);
+                conn.write_all(&out)?;
+            }
+        }
+        finish(conn, dns, procs, old, false)?;
+    }
+    procs.insert(pid, new);
+    Ok(())
+}
+
+/// The process still running as `id`. An exited one stays in `procs` until
+/// its output is read, under a pid already freed by `reap` (and, after a
+/// restart, under the same id as the new one): signalling it could reach
+/// another process, and would miss the running container (#324).
+fn running<'a>(procs: &'a HashMap<libc::pid_t, Proc>, id: &str) -> Option<&'a Proc> {
+    procs.values().find(|p| p.run.id == id && p.exited.is_none())
+}
+
 fn reap(procs: &mut HashMap<libc::pid_t, Proc>) {
     loop {
         let mut status = 0;
@@ -880,12 +949,76 @@ fn reap(procs: &mut HashMap<libc::pid_t, Proc>) {
         } else {
             continue;
         };
+        super::copy::exited(pid);
         if let Some(p) = procs.get_mut(&pid) {
             p.exited = Some((code, sys::boottime_ns()));
             // Nobody will read input any more.
             p.input.clear();
             p.run.stdin = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod running_tests {
+    use super::{Process, new_proc, running, running_pid};
+    use std::collections::HashMap;
+
+    #[test]
+    fn a_restarted_container_is_found_never_its_exited_run() {
+        // Each map hashes with its own seed, so 20 of them walk the two
+        // entries in both orders.
+        for _ in 0..20 {
+            let mut procs = HashMap::new();
+            // The first run has exited (reaped, its pid free) but its output
+            // is still being read; the restart runs under the same id.
+            let mut old = new_proc(Process::for_test("c1", 100), 0, 0);
+            old.exited = Some((0, 0));
+            procs.insert(100, old);
+            assert!(running(&procs, "c1").is_none(), "only an exited run: nothing to signal");
+            assert_eq!(running_pid(&procs, "c1"), None, "nor to exec into");
+            procs.insert(200, new_proc(Process::for_test("c1", 200), 0, 0));
+            assert_eq!(running(&procs, "c1").map(|p| p.run.pid), Some(200));
+            assert_eq!(running_pid(&procs, "c1"), Some(200));
+        }
+    }
+
+    fn pipe() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::FromRawFd;
+        let mut fds = [0; 2];
+        // SAFETY: pipe2 fills two descriptors we then own.
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        // SAFETY: both were just opened and are owned by nobody else.
+        unsafe { (std::fs::File::from_raw_fd(fds[0]), std::fs::File::from_raw_fd(fds[1])) }
+    }
+
+    #[test]
+    fn a_new_process_on_a_freed_pid_finishes_the_old_one_first() {
+        use kiri_proto::Msg;
+        use std::io::Write;
+        let (mut host, mut conn) = pipe();
+        let mut dns = super::super::dns::Dns::default();
+        let mut procs = HashMap::new();
+        // Exited and reaped, with output still unread when its pid is reused.
+        let (out_r, mut out_w) = pipe();
+        out_w.write_all(b"bye").unwrap();
+        drop(out_w);
+        let mut old = new_proc(Process::for_test("old", 100), 0, 0);
+        old.run.stdout = Some(out_r.into());
+        old.exited = Some((3, 0));
+        procs.insert(100, old);
+
+        super::admit(&mut conn, &mut dns, &mut procs, new_proc(Process::for_test("new", 100), 0, 0)).unwrap();
+        drop(conn);
+
+        assert_eq!(procs.len(), 1);
+        assert_eq!(procs[&100].run.id, "new");
+        let mut frame = Vec::new();
+        assert!(super::read_frame(&mut host, &mut frame).unwrap());
+        assert!(matches!(kiri_proto::decode(&frame), Ok(Msg::Output { id: "old", data: b"bye", .. })), "its last output first");
+        assert!(super::read_frame(&mut host, &mut frame).unwrap());
+        assert!(matches!(kiri_proto::decode(&frame), Ok(Msg::Exited(e)) if e.id == "old" && e.code == 3), "then its exit");
+        assert!(!super::read_frame(&mut host, &mut frame).unwrap(), "nothing about the new one");
     }
 }
 

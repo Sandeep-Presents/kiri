@@ -63,6 +63,7 @@
   "After the restart": "다시 시작한 후",
   "Age": "경과 시간",
   "All": "전체",
+  "All languages · {n}": "모든 언어 · {n}",
   "All levels": "모든 수준",
   "All statuses": "모든 상태",
   "All steps": "모든 단계",
@@ -613,6 +614,8 @@
   "No fix yet": "아직 수정 없음",
   "No images yet": "아직 이미지 없음",
   "No known vulnerabilities in {n} packages": "패키지 {n}개에서 알려진 취약점 없음",
+  "No language matches. Try its English name.": "일치하는 언어가 없습니다. 영어 이름으로 검색해 보세요.",
+  "No languages match": "일치하는 언어가 없습니다",
   "No lines match.": "일치하는 줄이 없습니다.",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "아직 미러가 없습니다: Docker Hub 이미지는 Docker Hub에서 직접 가져옵니다.",
   "No networks yet": "아직 네트워크 없음",
@@ -908,6 +911,7 @@
   "Search Kiri": "Kiri 검색",
   "Search Kiri…": "Kiri 검색…",
   "Search containers, images…": "컨테이너, 이미지 검색…",
+  "Search languages": "언어 검색",
   "Search {view}…": "{view} 검색…",
   "Searching Docker Hub": "Docker Hub 검색 중",
   "Security": "보안",
@@ -1091,6 +1095,7 @@
   "Storage": "저장 장치",
   "Strong enough": "충분히 강력함",
   "Subnet": "서브넷",
+  "Suggested": "추천",
   "Switch and import": "전환 후 가져오기",
   "Switch and import {n} item": "전환 후 항목 {n}개 가져오기",
   "Switch and import {n} items": "전환 후 항목 {n}개 가져오기",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— 로그 스트림이 끝났습니다 —",
   "‹ Back": "‹ 뒤로",
   "★ Star on GitHub": "★ GitHub에서 별 주기",
-  "✓ Installed": "✓ 설치됨"
+  "✓ Installed": "✓ 설치됨",
+  "Waiting to come back": "돌아오기를 기다리는 중",
+  "Stop waiting": "기다리지 않기",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "돌아오면 Kiri가 다시 연결합니다. 이 컴퓨터에 두려면 기다리기를 멈추세요."
 }

@@ -63,6 +63,7 @@
   "After the restart": "Dopo il riavvio",
   "Age": "Età",
   "All": "Tutto",
+  "All languages · {n}": "Tutte le lingue · {n}",
   "All levels": "Tutti i livelli",
   "All statuses": "Tutti gli stati",
   "All steps": "Tutti i passaggi",
@@ -613,6 +614,8 @@
   "No fix yet": "Ancora nessuna correzione",
   "No images yet": "Ancora nessuna immagine",
   "No known vulnerabilities in {n} packages": "Nessuna vulnerabilità nota in {n} pacchetti",
+  "No language matches. Try its English name.": "Nessuna lingua corrisponde. Prova con il nome in inglese.",
+  "No languages match": "Nessuna lingua corrispondente",
   "No lines match.": "Nessuna riga corrisponde.",
   "No mirrors yet: Docker Hub images come from Docker Hub itself.": "Nessun mirror: le immagini di Docker Hub arrivano da Docker Hub.",
   "No networks yet": "Ancora nessuna rete",
@@ -908,6 +911,7 @@
   "Search Kiri": "Cerca in Kiri",
   "Search Kiri…": "Cerca in Kiri…",
   "Search containers, images…": "Cerca container, immagini…",
+  "Search languages": "Cerca lingue",
   "Search {view}…": "Cerca in {view}…",
   "Searching Docker Hub": "Ricerca su Docker Hub",
   "Security": "Sicurezza",
@@ -1091,6 +1095,7 @@
   "Storage": "Archiviazione",
   "Strong enough": "Abbastanza sicura",
   "Subnet": "Subnet",
+  "Suggested": "Suggerite",
   "Switch and import": "Cambia e importa",
   "Switch and import {n} item": "Cambia e importa {n} elemento",
   "Switch and import {n} items": "Cambia e importa {n} elementi",
@@ -1669,5 +1674,8 @@
   "— the log stream ended —": "— il flusso del log è terminato —",
   "‹ Back": "‹ Indietro",
   "★ Star on GitHub": "★ Stella su GitHub",
-  "✓ Installed": "✓ Installato"
+  "✓ Installed": "✓ Installato",
+  "Waiting to come back": "In attesa del ritorno",
+  "Stop waiting": "Smetti di attendere",
+  "Kiri attaches it again when it's back. Stop waiting to leave it on this computer.": "Kiri lo ricollega quando torna. Smetti di attendere per lasciarlo su questo computer."
 }
