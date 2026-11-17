@@ -202,15 +202,39 @@ fn wsl_text(bytes: &[u8]) -> String {
 }
 
 fn wsl_installed() -> bool {
-    quiet("wsl.exe").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    match crate::update::output_within(quiet("wsl.exe").arg("--version"), crate::update::WSL_LIMIT) {
+        Ok(o) => o.status.success(),
+        // A wsl.exe that hangs is there, only not answering.
+        Err(e) => e.kind() == io::ErrorKind::TimedOut,
+    }
 }
 
-pub(crate) fn distros() -> Vec<String> {
-    quiet("wsl.exe").args(["-l", "-q"]).output().map(|o| wsl_text(&o.stdout).lines().map(|l| l.trim().to_owned()).filter(|l| !l.is_empty()).collect()).unwrap_or_default()
+/// WSL's distros, or None when WSL did not answer: wsl.exe failed, or ran
+/// past WSL_LIMIT. Empty when there is nothing to list: no distros, no
+/// WSL turned on, or no wsl.exe at all.
+pub(crate) fn distros() -> Option<Vec<String>> {
+    let o = match crate::update::output_within(quiet("wsl.exe").args(["-l", "-q"]), crate::update::WSL_LIMIT) {
+        Ok(o) => o,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
+    };
+    if !o.status.success() {
+        return (nothing_listed(&o.stdout) || nothing_listed(&o.stderr)).then(Vec::new);
+    }
+    Some(wsl_text(&o.stdout).lines().map(|l| l.trim().to_owned()).filter(|l| !l.is_empty()).collect())
+}
+
+/// Whether a failed `wsl.exe -l` said there is nothing to list, rather than
+/// that WSL did not answer. Its error codes read the same in every language;
+/// the NULs go so they match in UTF-16 too, whatever wsl_text makes of the
+/// translated text around them.
+fn nothing_listed(out: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(out).replace('\0', "");
+    ["WSL_E_DEFAULT_DISTRO_NOT_FOUND", "WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED"].iter().any(|code| text.contains(code))
 }
 
 fn existing_ubuntu() -> Option<String> {
-    distros().into_iter().find(|d| d.starts_with("Ubuntu"))
+    distros().unwrap_or_default().into_iter().find(|d| d.starts_with("Ubuntu"))
 }
 
 /// Another Docker on this PC: Docker Desktop, or a docker CLI on PATH that is not Kiri's.
@@ -235,7 +259,14 @@ fn restarted_since(at: u64) -> bool {
 /// Whether the window should open on setup rather than Kiri.
 pub fn needed() -> bool {
     let s = saved();
-    !s.done || s.distro.as_deref().is_none_or(|d| !distros().iter().any(|x| x == d))
+    needs_setup(s.done, s.distro.as_deref(), distros)
+}
+
+/// Setup is needed when it never finished, or its distro has gone from
+/// WSL's list. A WSL that does not answer (`listed` gives None) is not a
+/// missing one: the main window says why the engine is down.
+fn needs_setup(done: bool, distro: Option<&str>, listed: impl FnOnce() -> Option<Vec<String>>) -> bool {
+    !done || distro.is_none_or(|d| listed().is_some_and(|l| !l.iter().any(|x| x == d)))
 }
 
 /// The step to show now, from what is on this PC.
@@ -249,7 +280,7 @@ fn current_step(s: &Saved) -> &'static str {
         }
     }
     match &s.distro {
-        Some(d) if distros().iter().any(|x| x == d) => {
+        Some(d) if distros().is_some_and(|l| l.iter().any(|x| x == d)) => {
             if crate::client::alive() {
                 "tools"
             } else {
@@ -537,7 +568,7 @@ fn install_linux(kind: &str) -> io::Result<()> {
         let tar = verified("kiri-linux.tar.gz")?;
         task(0, "done", &format!("{} MB", std::fs::metadata(&tar)?.len().div_ceil(1_000_000)));
         task(1, "active", "");
-        if !distros().iter().any(|d| d == KIRI_DISTRO) {
+        if !distros().unwrap_or_default().iter().any(|d| d == KIRI_DISTRO) {
             log_line(&format!("wsl --import {KIRI_DISTRO} {} kiri-linux.tar.gz --version 2", base.join(KIRI_DISTRO).display()));
             wsl_ok(quiet("wsl.exe").args(["--import", KIRI_DISTRO]).arg(base.join(KIRI_DISTRO)).arg(&tar).args(["--version", "2"]))?;
         }
@@ -886,5 +917,28 @@ mod tests {
         assert_eq!(super::test_failure(run), "the test container did not run: no space left on device");
         assert_eq!(super::test_failure("something odd\n"), "the test container did not run: something odd");
         assert_eq!(super::test_failure(""), "the test container did not run");
+    }
+
+    #[test]
+    fn a_wsl_that_does_not_answer_is_not_a_missing_wsl() {
+        use super::needs_setup;
+        let listed = |names: &[&str]| -> Option<Vec<String>> { Some(names.iter().map(|n| n.to_string()).collect()) };
+        // First run, or no distro picked yet: setup, without asking WSL.
+        assert!(needs_setup(false, Some("kiri"), || panic!("asked WSL")));
+        assert!(needs_setup(true, None, || panic!("asked WSL")));
+        // Kiri's distro listed: Kiri. Gone from the list: setup again.
+        assert!(!needs_setup(true, Some("kiri"), || listed(&["docker-desktop", "kiri"])));
+        assert!(needs_setup(true, Some("kiri"), || listed(&["Ubuntu"])));
+        assert!(needs_setup(true, Some("kiri"), || listed(&[])));
+        // WSL failed or timed out: not a missing distro.
+        assert!(!needs_setup(true, Some("kiri"), || None));
+
+        // A failed `wsl -l` that says there is nothing to list, in WSL's
+        // UTF-16, translated too, against one that only timed out.
+        let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+        assert!(super::nothing_listed(&utf16("Windows Subsystem for Linux has no installed distributions.\r\nError code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND\r\n")));
+        assert!(super::nothing_listed(&utf16("Для подсистемы Windows для Linux требуется дополнительный компонент.\r\nWsl/WSL_E_WSL_OPTIONAL_COMPONENT_REQUIRED\r\n")));
+        assert!(!super::nothing_listed(&utf16("Error code: Wsl/Service/WSAETIMEDOUT\r\n")));
+        assert!(!super::nothing_listed(b""));
     }
 }
