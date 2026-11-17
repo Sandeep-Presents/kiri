@@ -31,4 +31,8 @@ t("the copy key leaves text fields and an empty selection alone", () => {
   copyKey(field);
   eq(sent.filter((m) => m.cmd === "term" && m.name === "copy").length, 0, "copies sent");
 });
+t("the search field's text can be selected, though the window's can't", () => {
+  const style = getComputedStyle(document.querySelector(".gfind input"));
+  eq(style.userSelect || style.webkitUserSelect, "text", "user-select");
+});
 report(R);
