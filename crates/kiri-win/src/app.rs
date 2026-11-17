@@ -57,7 +57,15 @@ pub fn in_setup() -> bool {
 }
 
 fn page_html() -> String {
-    if SETUP.load(Ordering::SeqCst) { crate::assemble::words(SETUP_PAGE, crate::engine::prefs()["lang"].as_str()) } else { crate::assemble::page(PAGE, crate::engine::prefs()["lang"].as_str()) }
+    let prefs = crate::engine::prefs();
+    let lang = prefs["lang"].as_str();
+    if SETUP.load(Ordering::SeqCst) {
+        return crate::assemble::words(SETUP_PAGE, lang);
+    }
+    let page = crate::assemble::page(PAGE, lang);
+    // A page NavigateToString won't take leaves the window blank: in a language
+    // whose words take it past, it opens in English and asks for them.
+    if crate::assemble::fits_webview2(&page) { page } else { crate::assemble::page_english(PAGE, lang) }
 }
 /// Kiri's icon cropped to its artwork for Windows (brand/windows-icons.ps1),
 /// by size: the Mac's has Apple's margin and looks small in the taskbar.
