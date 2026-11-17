@@ -241,6 +241,23 @@ pub(super) fn set_appearance(theme: &str) {
         };
         let _: () = msg_send![&*app, setAppearance: appearance.as_deref()];
     }
+    // AppKit lays the title bar out again for the new appearance, which puts
+    // the traffic lights back where it keeps them (#187). Lay it out now and
+    // move them into the strip again, as after a resize.
+    WINDOW.with(|w| {
+        if let Some(w) = w.borrow().as_ref() {
+            // SAFETY: main thread; the content view's superview is the
+            // window's frame view, which holds the title bar.
+            unsafe {
+                let content: Option<Retained<AnyObject>> = msg_send![&**w, contentView];
+                let frame: Option<Retained<AnyObject>> = content.and_then(|c| msg_send![&*c, superview]);
+                if let Some(frame) = frame {
+                    let _: () = msg_send![&*frame, layoutSubtreeIfNeeded];
+                }
+            }
+            place_lights(w);
+        }
+    });
 }
 
 /// Shows the window (after it was closed or hidden) and brings Kiri forward,
