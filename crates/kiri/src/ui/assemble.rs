@@ -10,10 +10,14 @@
 //! comes when the page switches to it: the page sends `langwords` and the
 //! host evaluates `lang::words_js`.
 //!
-//! The page is loaded as a string, and WebView2's NavigateToString takes at
-//! most 2 MB. With xterm.js and the keys it is about 1.4 M UTF-16 units, and
-//! a language adds its words: 40 to 60 K units. All of them would be well
-//! past the limit, which is why the page carries only one.
+//! The page is loaded as a string, and WebView2's NavigateToString takes it
+//! as a base64 data: URL of at most 2 MiB: 1.5 MiB of UTF-8
+//! ([`fits_webview2`]). With xterm.js and the keys it is about 1.49 MB, and a
+//! language adds its words: 60 to 150 KB, the most in scripts that take 2 or
+//! 3 bytes a letter (Cyrillic, Greek, Arabic, Indic). All of them would be
+//! well past the limit, which is why the page carries only one; and when that
+//! one still takes it past, kiri-win opens the page with the English words
+//! alone ([`page_english`]), and the page asks for its own as it starts.
 
 const ICONS_JS: &str = include_str!("icons.js");
 /// The languages and the first start's language step, which both pages show.
@@ -26,6 +30,29 @@ const XTERM_JS: [&str; 4] = [include_str!("xterm/xterm.js"), include_str!("xterm
 /// `index` (index.html) with everything spliced in, `lang` (the `lang`
 /// setting) picking its language.
 pub fn page(index: &str, lang: Option<&str>) -> String {
+    assemble(index, lang, super::lang::resolve(lang))
+}
+
+/// [`page`] with the English words alone, `lang` still the one picked: the
+/// page asks the host for that language's words (`langwords`) as it starts
+/// and shows them a moment later, as when the language is switched.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn page_english(index: &str, lang: Option<&str>) -> String {
+    assemble(index, lang, "en")
+}
+
+/// Whether WebView2's NavigateToString loads `page`: it takes it as a base64
+/// data: URL of at most 2 MiB, and past that it fails and the window stays
+/// blank (with WebView2 157, a page of 1,486,611 bytes loads and one of
+/// 1,584,785 doesn't).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn fits_webview2(page: &str) -> bool {
+    page.len().div_ceil(3) * 4 <= 2 * 1024 * 1024
+}
+
+/// `index` with everything spliced in: `lang` picked, carrying the words of
+/// `words` (a tag `lang::resolve` gave, or "en" for the keys alone).
+fn assemble(index: &str, lang: Option<&str>, words: &str) -> String {
     let mut js = String::with_capacity(XTERM_JS.iter().map(|s| s.len() + 1).sum());
     for part in XTERM_JS {
         js.push_str(part);
@@ -38,7 +65,7 @@ pub fn page(index: &str, lang: Option<&str>) -> String {
         .replacen("/*XTERM_CSS*/", XTERM_CSS, 1)
         .replacen("/*XTERM_JS*/", &js, 1)
         .replacen("/*LANG*/", &super::lang::boot_js(lang), 1)
-        .replacen("/*STRINGS*/{}", &super::lang::strings_js(super::lang::resolve(lang)), 1)
+        .replacen("/*STRINGS*/{}", &super::lang::strings_js(words), 1)
 }
 
 /// A page that only needs its words and the language step spliced in
@@ -54,8 +81,8 @@ mod tests {
 
     #[test]
     fn every_placeholder_is_filled_once_and_the_page_fits_webview2() {
-        let units = |s: &str| s.encode_utf16().count();
-        let page = super::page(include_str!("index.html"), None);
+        let index = include_str!("index.html");
+        let page = super::page(index, None);
         for p in ["/*ICONS*/", "/*LANGSTEP*/", "/*XTERM_CSS*/", "/*XTERM_JS*/", "/*LANG*/", "/*STRINGS*/"] {
             assert!(!page.contains(p), "{p} left in the page");
         }
@@ -68,24 +95,25 @@ mod tests {
         assert!(setup.contains("function langStep("), "langstep.js missing from the setup page");
         assert!(page.contains("window.KIRI_LANG = {") && page.contains(&lang::strings_js(lang::resolve(None))), "words missing");
         // Each language the page can open in carries the keys and that language
-        // alone: the largest must stay well inside NavigateToString's 2 MB, with
-        // room for the page to grow.
-        let (mut worst, mut biggest) = (0, "");
+        // alone, and opens on Windows: in its own words when the page fits
+        // NavigateToString, and in English, still picked, when it doesn't.
         for (tag, _) in lang::FILES {
-            let p = super::page(include_str!("index.html"), Some(tag));
+            let p = super::page(index, Some(tag));
             assert!(p.contains(&lang::strings_js(tag)), "{tag}'s words missing");
             for (other, _) in lang::FILES {
                 assert!(other == tag || !p.contains(&format!("\"{other}\":[")), "{tag}'s page carries {other} too");
             }
-            if units(&p) > worst {
-                (worst, biggest) = (units(&p), tag);
+            if !super::fits_webview2(&p) {
+                let english = super::page_english(index, Some(tag));
+                assert!(super::fits_webview2(&english), "{tag}'s page in English is {} bytes", english.len());
+                assert!(english.contains(&lang::boot_js(Some(tag))) && english.contains(&lang::strings_js("en")), "{tag} not picked in its English page");
             }
         }
-        // NavigateToString's limit is 2 MB; 1.8 M keeps a margin, and the worst
-        // case stays 200 K under that (a language's words are about 60 K).
-        assert!(worst + 200_000 < 1_800_000, "the page in {biggest} is {worst} UTF-16 units");
-        assert!(units(&page) <= worst);
+        // English, which any page falls back to, keeps room to grow: its data:
+        // URL stays 64 KiB under the limit.
+        let english = super::page_english(index, None);
+        assert!(english.len().div_ceil(3) * 4 + 64 * 1024 <= 2 * 1024 * 1024, "the English page is {} bytes", english.len());
         // Setup's page too.
-        assert!(units(&super::words("/*LANG*/ /*STRINGS*/{}", Some(biggest))) < 200_000);
+        assert!(lang::FILES.iter().all(|(tag, _)| super::fits_webview2(&super::words(include_str!("../../../kiri-win/src/setup.html"), Some(tag)))));
     }
 }
