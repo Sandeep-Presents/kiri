@@ -437,6 +437,8 @@ fn info(engine: &Engine) -> Value {
         "DefaultRuntime": "kiri",
         "Runtimes": {"kiri": {"path": "kiri-init"}},
         "SecurityOptions": ["name=seccomp,profile=builtin", "name=cgroupns"],
+        // Compose needs it to attach in `up` and `logs -f` (#346).
+        "SystemTime": time::rfc3339(std::time::SystemTime::now()),
         // Not in Docker's /info (the ping's Builder-Version header is), but
         // tools print it: the classic builder API, served by builder.rs.
         "BuilderVersion": "1",
