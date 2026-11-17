@@ -112,7 +112,7 @@ body.win .strip .lights, body.linux .strip .lights { display: none; }
 .gfind:hover { border-color: color-mix(in srgb, var(--text) 22%, var(--line)); }
 .gfind:focus-within { width: 400px; background: var(--panel); border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent); }
 .gfind > svg { width: 14px; height: 14px; color: var(--muted); flex: none; }
-.gfind input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: var(--fs) var(--ui-font); outline: none; }
+.gfind input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--text); font: var(--fs) var(--ui-font); outline: none; -webkit-user-select: text; user-select: text; }
 .gfind input::placeholder { color: var(--faint); }
 .gfind kbd { flex: none; height: 18px; padding: 0 6px; border-radius: 5px; display: inline-flex; align-items: center; font: 500 var(--fs-small) var(--ui-font);
              color: var(--faint); background: color-mix(in srgb, var(--text) 6%, transparent); transition: opacity .15s; }
@@ -2760,12 +2760,11 @@ document.addEventListener("contextmenu", (ev) => {
   const editable = ev.target.closest?.("input, textarea, [contenteditable]");
   if (!editable && !String(getSelection()).trim()) ev.preventDefault();
 });
-/* Copy with the keyboard. The window has no Edit menu, which is where the
-   Mac gets Copy's key from, so selected text (a log, a row's value) goes to
-   the clipboard the way the terminal's does. Text fields and the terminal
-   keep their own handling. */
+/* Copy with the keyboard: selected text (a log, a row's value) goes to the
+   clipboard the way the terminal's does. On the Mac, Edit → Copy does it.
+   Text fields and the terminal keep their own handling. */
 document.addEventListener("keydown", (ev) => {
-  const mod = WIN || LINUX ? ev.ctrlKey && !ev.metaKey : ev.metaKey && !ev.ctrlKey;
+  const mod = (WIN || LINUX) && ev.ctrlKey && !ev.metaKey;
   if (!mod || ev.altKey || ev.shiftKey || ev.key.toLowerCase() !== "c") return;
   if (ev.target.closest?.("input, textarea, [contenteditable], .xterm")) return;
   const text = String(getSelection());
